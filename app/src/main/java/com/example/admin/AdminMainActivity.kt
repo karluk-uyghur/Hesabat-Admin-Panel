@@ -2,7 +2,7 @@ package com.example.admin
 
 import android.content.Context
 import android.content.Intent
-import android.net.TrafficStats
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
 import android.view.WindowManager
@@ -12,8 +12,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -37,16 +37,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import java.io.File
@@ -58,29 +61,40 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-// باشقۇرغۇچى رەڭ لايىھەسى
+const val ADMIN_MASTER_EMAIL = "uyghur162142@gmail.com"
+const val SHARED_CRYPTO_SALT = "HESABAT_SYNC_2026_SECRET"
+
+val WolfGold = Color(0xFFF5B800)
+val WolfBlack = Color(0xFF0B0B0B)
 val AdminIndigo = Color(0xFF6366F1)
 val AdminTurquoise = Color(0xFF06B6D4)
 val AdminEmerald = Color(0xFF10B981)
 val AdminRose = Color(0xFFF43F5E)
-val AdminAmber = Color(0xFFF59E0B)
-val AdminDarkBg = Color(0xFF070C1A)
-val AdminCardSurface = Color(0xFF111C35)
 
-const val ADMIN_MASTER_EMAIL = "uyghur162142@gmail.com"
-const val SHARED_CRYPTO_SALT = "HESABAT_SYNC_2026_SECRET"
+enum class AdminLanguage(val code: String, val title: String) {
+    UG("ug", "ئۇيغۇرچە"),
+    AR("ar", "العربية")
+}
+
+fun tr(lang: AdminLanguage, ug: String, ar: String): String {
+    return if (lang == AdminLanguage.UG) ug else ar
+}
+
+enum class AccountOpenMethod(val ugLabel: String, val arLabel: String, val icon: ImageVector) {
+    BY_GMAIL("Gmail ئارقىلىق ھېسابات ئېچىش", "فتح حساب عبر Gmail", Icons.Filled.Email),
+    BY_NAME("ئىسىم ئارقىلىق ھېسابات ئېچىش", "فتح حساب عبر الاسم", Icons.Filled.Person),
+    BY_ACCOUNT_ID("ھېسابات نامى ئارقىلىق ئېچىش", "فتح حساب عبر المعرف", Icons.Filled.Badge)
+}
 
 class AdminMainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // باشقا ئۈسكۈنە ياكى ئىز قوغلاش پىروگراممىلىرىنىڭ ئېكراننى تارتىۋېلىشىدىن قوغداش
         window.setFlags(
             WindowManager.LayoutParams.FLAG_SECURE,
             WindowManager.LayoutParams.FLAG_SECURE
@@ -89,43 +103,25 @@ class AdminMainActivity : ComponentActivity() {
 
         enableEdgeToEdge()
         setContent {
-            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
-                MaterialTheme(
-                    colorScheme = darkColorScheme(
-                        primary = AdminIndigo,
-                        secondary = AdminTurquoise,
-                        background = AdminDarkBg,
-                        surface = AdminCardSurface,
-                        onSurface = Color.White,
-                        onBackground = Color.White
-                    )
-                ) {
-                    AdminRootApp()
-                }
-            }
+            AdminRootScreen()
         }
     }
 }
 
-// خېرىدار ۋە ھېسابات مودېلى
-data class ClientAccountRecord(
+data class ManagedUserAccount(
     val id: String,
+    val openMethod: String, // BY_GMAIL, BY_NAME, BY_ACCOUNT_ID
     val fullName: String,
     val username: String,
+    val gmail: String,
     val password: String,
-    val email: String,
-    val streetName: String,
-    val houseNumber: String,
-    val flowAmount: String,
-    val openDate: String,
-    val notes: String,
-    val status: String, // PENDING, APPROVED, VIP, FROZEN
+    val address: String,
     val licenseCode: String,
     val isVip: Boolean,
     val vipExpireEpochMillis: Long,
-    val paidMonths: List<Boolean>
+    val status: String, // PENDING, ACTIVE, VIP, FROZEN
+    val createdAt: String
 ) {
-    fun paidCount(): Int = paidMonths.count { it }
     fun isVipActive(): Boolean = isVip && (vipExpireEpochMillis == 0L || vipExpireEpochMillis > System.currentTimeMillis())
     fun vipRemainingDays(): Long {
         if (!isVip) return 0L
@@ -135,30 +131,41 @@ data class ClientAccountRecord(
     }
 }
 
-data class ClientFeedbackMessage(
-    val id: String,
-    val clientUsername: String,
-    val clientName: String,
-    val message: String,
-    val adminReply: String,
-    val timestamp: String
+data class AppVersionRelease(
+    val versionName: String,
+    val apkDownloadUrl: String,
+    val releaseNotes: String,
+    val forceUpdate: Boolean,
+    val targetAccount: String, // ALL ياكى مەخسۇس ھېسابات
+    val publishedAt: String
 )
 
-data class BroadcastReminder(
-    val id: String,
-    val title: String,
-    val content: String,
-    val targetUsername: String, // ALL ياكى مەخسۇس ھېسابات ئىسمى
-    val timestamp: String
+data class ClientAppControlConfig(
+    val allowNewRegistration: Boolean,
+    val requireVerificationCode: Boolean,
+    val remoteMaintenanceLock: Boolean,
+    val announcementBanner: String
 )
 
-/**
- * باشقۇرغۇچى مەخسۇس ساقلاش ئامبىرى ۋە بۇلۇت ماس قەدەملەش ماتورى
- */
-class AdminVaultStorage(private val context: Context) {
-    private val prefs = context.getSharedPreferences("hesabat_admin_master_vault_v1", Context.MODE_PRIVATE)
-    private val vaultFile: File
-        get() = File(context.filesDir, "hesabat_admin_database.json")
+class AdminStorageEngine(private val context: Context) {
+    private val prefs = context.getSharedPreferences("hesabat_admin_v4_vault", Context.MODE_PRIVATE)
+    private val dbFile: File
+        get() = File(context.filesDir, "hesabat_admin_v4_accounts.json")
+    private val bgFile: File
+        get() = File(context.filesDir, "admin_custom_bg.jpg")
+    private val logoFile: File
+        get() = File(context.filesDir, "admin_custom_logo.jpg")
+
+    init {
+        // بۇرۇنقى ئۈلگە ھېساباتلارنى بىر قېتىم پاكىز تازىلاش
+        if (!prefs.getBoolean("cleaned_sample_accounts_v4", false)) {
+            prefs.edit()
+                .remove("accounts_json")
+                .putBoolean("cleaned_sample_accounts_v4", true)
+                .commit()
+            runCatching { if (dbFile.exists()) dbFile.delete() }
+        }
+    }
 
     fun verifyAdminPassword(input: String): Boolean {
         val savedHash = prefs.getString("admin_pwd_hash", null) ?: sha256("162142")
@@ -172,129 +179,58 @@ class AdminVaultStorage(private val context: Context) {
         return true
     }
 
-    fun getCloudSyncUrl(): String {
-        return prefs.getString("cloud_sync_url", "") ?: ""
+    fun getLanguage(): AdminLanguage {
+        return if (prefs.getString("lang", "ug") == "ar") AdminLanguage.AR else AdminLanguage.UG
     }
+
+    fun setLanguage(lang: AdminLanguage) {
+        prefs.edit().putString("lang", lang.code).commit()
+    }
+
+    fun isDarkMode(): Boolean = prefs.getBoolean("dark_mode", true)
+
+    fun setDarkMode(dark: Boolean) {
+        prefs.edit().putBoolean("dark_mode", dark).commit()
+    }
+
+    fun getCloudSyncUrl(): String = prefs.getString("cloud_sync_url", "") ?: ""
 
     fun setCloudSyncUrl(url: String) {
         prefs.edit().putString("cloud_sync_url", url.trim()).commit()
     }
 
-    /**
-     * ھەر بىر ھېسابات ئىسمىغا باغلاپ ئۆزگىچە دەلىللەش كودى ياساش.
-     * بۇ كود خېرىدار ئەپىدە %100 ماس كېلىپ دەلىللىنىدۇ.
-     */
-    fun generateVerificationCode(username: String, isVip: Boolean = false): String {
-        val clean = username.trim().lowercase()
+    fun generateVerificationCode(identifier: String, isVip: Boolean = false): String {
+        val clean = identifier.trim().lowercase()
         if (clean.isEmpty()) return ""
         val raw = sha256("$SHARED_CRYPTO_SALT::$clean").uppercase()
-        val p1 = raw.substring(0, 4)
-        val p2 = raw.substring(4, 8)
         val prefix = if (isVip) "VIP" else "HSB"
-        return "$prefix-$p1-$p2"
+        return "$prefix-${raw.substring(0, 4)}-${raw.substring(4, 8)}"
     }
 
-    fun loadAccounts(): List<ClientAccountRecord> {
-        val rawText = runCatching {
-            if (vaultFile.exists()) vaultFile.readText(Charsets.UTF_8) else ""
+    fun loadAccounts(): List<ManagedUserAccount> {
+        val raw = runCatching {
+            if (dbFile.exists()) dbFile.readText(Charsets.UTF_8) else ""
         }.getOrDefault("").ifBlank {
-            prefs.getString("accounts_json", "") ?: ""
+            prefs.getString("accounts_json", "[]") ?: "[]"
         }
-
-        if (rawText.isBlank()) {
-            val defaults = createInitialSampleAccounts()
-            saveAccounts(defaults)
-            return defaults
-        }
-
-        return try {
-            val arr = JSONArray(rawText)
-            val list = mutableListOf<ClientAccountRecord>()
-            for (i in 0 until arr.length()) {
-                val o = arr.optJSONObject(i) ?: continue
-                val mArr = o.optJSONArray("paidMonths")
-                val months = List(12) { idx -> mArr?.optBoolean(idx, false) ?: false }
-                list.add(
-                    ClientAccountRecord(
-                        id = o.optString("id", UUID.randomUUID().toString()),
-                        fullName = o.optString("fullName"),
-                        username = o.optString("username"),
-                        password = o.optString("password"),
-                        email = o.optString("email"),
-                        streetName = o.optString("streetName"),
-                        houseNumber = o.optString("houseNumber"),
-                        flowAmount = o.optString("flowAmount"),
-                        openDate = o.optString("openDate"),
-                        notes = o.optString("notes"),
-                        status = o.optString("status", "APPROVED"),
-                        licenseCode = o.optString("licenseCode"),
-                        isVip = o.optBoolean("isVip", false),
-                        vipExpireEpochMillis = o.optLong("vipExpireEpochMillis", 0L),
-                        paidMonths = months
-                    )
-                )
-            }
-            list
-        } catch (_: Exception) {
-            emptyList()
-        }
-    }
-
-    fun saveAccounts(accounts: List<ClientAccountRecord>) {
-        val arr = JSONArray()
-        accounts.forEach { acc ->
-            arr.put(
-                JSONObject().apply {
-                    put("id", acc.id)
-                    put("fullName", acc.fullName)
-                    put("username", acc.username)
-                    put("password", acc.password)
-                    put("email", acc.email)
-                    put("streetName", acc.streetName)
-                    put("houseNumber", acc.houseNumber)
-                    put("flowAmount", acc.flowAmount)
-                    put("openDate", acc.openDate)
-                    put("notes", acc.notes)
-                    put("status", acc.status)
-                    put("licenseCode", acc.licenseCode)
-                    put("isVip", acc.isVip)
-                    put("vipExpireEpochMillis", acc.vipExpireEpochMillis)
-                    put("paidMonths", JSONArray(acc.paidMonths))
-                }
-            )
-        }
-        val json = arr.toString()
-        prefs.edit().putString("accounts_json", json).commit()
-        runCatching { vaultFile.writeText(json, Charsets.UTF_8) }
-    }
-
-    fun loadFeedbackMessages(): List<ClientFeedbackMessage> {
-        val raw = prefs.getString("feedback_json", "") ?: ""
-        if (raw.isBlank()) {
-            val sample = listOf(
-                ClientFeedbackMessage(
-                    id = "msg_1",
-                    clientUsername = "alim01",
-                    clientName = "ئالىمجان",
-                    message = "ئەسسالامۇئەلەيكۇم باشقۇرغۇچى، مەن ھېسابات ئاچقان ئىدىم، دەلىللەش كودى ئەۋەتىپ بېرەمسىز؟",
-                    adminReply = "",
-                    timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date())
-                )
-            )
-            saveFeedbackMessages(sample)
-            return sample
-        }
+        if (raw.isBlank() || raw == "[]") return emptyList()
         return try {
             val arr = JSONArray(raw)
             List(arr.length()) { i ->
                 val o = arr.getJSONObject(i)
-                ClientFeedbackMessage(
-                    id = o.optString("id"),
-                    clientUsername = o.optString("clientUsername"),
-                    clientName = o.optString("clientName"),
-                    message = o.optString("message"),
-                    adminReply = o.optString("adminReply"),
-                    timestamp = o.optString("timestamp")
+                ManagedUserAccount(
+                    id = o.optString("id", UUID.randomUUID().toString()),
+                    openMethod = o.optString("openMethod", "BY_GMAIL"),
+                    fullName = o.optString("fullName"),
+                    username = o.optString("username"),
+                    gmail = o.optString("gmail"),
+                    password = o.optString("password"),
+                    address = o.optString("address"),
+                    licenseCode = o.optString("licenseCode"),
+                    isVip = o.optBoolean("isVip", false),
+                    vipExpireEpochMillis = o.optLong("vipExpireEpochMillis", 0L),
+                    status = o.optString("status", "ACTIVE"),
+                    createdAt = o.optString("createdAt")
                 )
             }
         } catch (_: Exception) {
@@ -302,99 +238,149 @@ class AdminVaultStorage(private val context: Context) {
         }
     }
 
-    fun saveFeedbackMessages(list: List<ClientFeedbackMessage>) {
+    fun saveAccounts(list: List<ManagedUserAccount>) {
         val arr = JSONArray()
-        list.forEach { m ->
+        list.forEach { a ->
             arr.put(
                 JSONObject().apply {
-                    put("id", m.id)
-                    put("clientUsername", m.clientUsername)
-                    put("clientName", m.clientName)
-                    put("message", m.message)
-                    put("adminReply", m.adminReply)
-                    put("timestamp", m.timestamp)
+                    put("id", a.id)
+                    put("openMethod", a.openMethod)
+                    put("fullName", a.fullName)
+                    put("username", a.username)
+                    put("gmail", a.gmail)
+                    put("password", a.password)
+                    put("address", a.address)
+                    put("licenseCode", a.licenseCode)
+                    put("isVip", a.isVip)
+                    put("vipExpireEpochMillis", a.vipExpireEpochMillis)
+                    put("status", a.status)
+                    put("createdAt", a.createdAt)
                 }
             )
         }
-        prefs.edit().putString("feedback_json", arr.toString()).commit()
+        val text = arr.toString()
+        prefs.edit().putString("accounts_json", text).commit()
+        runCatching { dbFile.writeText(text, Charsets.UTF_8) }
     }
 
-    fun loadReminders(): List<BroadcastReminder> {
-        val raw = prefs.getString("reminders_json", "[]") ?: "[]"
+    fun loadLatestRelease(): AppVersionRelease {
+        return AppVersionRelease(
+            versionName = prefs.getString("rel_version", "1.1.0") ?: "1.1.0",
+            apkDownloadUrl = prefs.getString("rel_url", "") ?: "",
+            releaseNotes = prefs.getString("rel_notes", "") ?: "",
+            forceUpdate = prefs.getBoolean("rel_force", false),
+            targetAccount = prefs.getString("rel_target", "ALL") ?: "ALL",
+            publishedAt = prefs.getString("rel_date", "") ?: ""
+        )
+    }
+
+    fun saveLatestRelease(rel: AppVersionRelease) {
+        prefs.edit()
+            .putString("rel_version", rel.versionName)
+            .putString("rel_url", rel.apkDownloadUrl)
+            .putString("rel_notes", rel.releaseNotes)
+            .putBoolean("rel_force", rel.forceUpdate)
+            .putString("rel_target", rel.targetAccount)
+            .putString("rel_date", rel.publishedAt)
+            .commit()
+    }
+
+    fun loadClientControlConfig(): ClientAppControlConfig {
+        return ClientAppControlConfig(
+            allowNewRegistration = prefs.getBoolean("cfg_allow_reg", true),
+            requireVerificationCode = prefs.getBoolean("cfg_req_code", true),
+            remoteMaintenanceLock = prefs.getBoolean("cfg_remote_lock", false),
+            announcementBanner = prefs.getString("cfg_banner", "") ?: ""
+        )
+    }
+
+    fun saveClientControlConfig(cfg: ClientAppControlConfig) {
+        prefs.edit()
+            .putBoolean("cfg_allow_reg", cfg.allowNewRegistration)
+            .putBoolean("cfg_req_code", cfg.requireVerificationCode)
+            .putBoolean("cfg_remote_lock", cfg.remoteMaintenanceLock)
+            .putString("cfg_banner", cfg.announcementBanner)
+            .commit()
+    }
+
+    fun saveBackgroundFromUri(uri: Uri): Boolean {
         return try {
-            val arr = JSONArray(raw)
-            List(arr.length()) { i ->
-                val o = arr.getJSONObject(i)
-                BroadcastReminder(
-                    id = o.optString("id"),
-                    title = o.optString("title"),
-                    content = o.optString("content"),
-                    targetUsername = o.optString("targetUsername", "ALL"),
-                    timestamp = o.optString("timestamp")
-                )
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                bgFile.outputStream().use { out -> input.copyTo(out) }
             }
+            true
         } catch (_: Exception) {
-            emptyList()
+            false
         }
     }
 
-    fun saveReminders(list: List<BroadcastReminder>) {
-        val arr = JSONArray()
-        list.forEach { r ->
-            arr.put(
-                JSONObject().apply {
-                    put("id", r.id)
-                    put("title", r.title)
-                    put("content", r.content)
-                    put("targetUsername", r.targetUsername)
-                    put("timestamp", r.timestamp)
-                }
-            )
-        }
-        prefs.edit().putString("reminders_json", arr.toString()).commit()
+    fun clearBackground() {
+        runCatching { if (bgFile.exists()) bgFile.delete() }
     }
 
-    fun buildFullBackupJson(): String {
+    fun loadBackgroundBitmap(): ImageBitmap? {
+        return try {
+            if (bgFile.exists()) BitmapFactory.decodeFile(bgFile.absolutePath)?.asImageBitmap() else null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun saveLogoFromUri(uri: Uri): Boolean {
+        return try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                logoFile.outputStream().use { out -> input.copyTo(out) }
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    fun loadLogoBitmap(): ImageBitmap? {
+        return try {
+            if (logoFile.exists()) BitmapFactory.decodeFile(logoFile.absolutePath)?.asImageBitmap() else null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun buildSyncPayloadJson(): String {
+        val rel = loadLatestRelease()
+        val cfg = loadClientControlConfig()
+        val accountsArr = JSONArray(prefs.getString("accounts_json", "[]") ?: "[]")
         return JSONObject().apply {
-            put("app", "Hesabat-Admin-Panel")
-            put("adminEmail", ADMIN_MASTER_EMAIL)
-            put("exportedAt", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date()))
-            put("accounts", JSONArray(prefs.getString("accounts_json", "[]") ?: "[]"))
-            put("reminders", JSONArray(prefs.getString("reminders_json", "[]") ?: "[]"))
-            put("feedback", JSONArray(prefs.getString("feedback_json", "[]") ?: "[]"))
+            put("adminMasterEmail", ADMIN_MASTER_EMAIL)
+            put("syncedAt", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date()))
+            put("accounts", accountsArr)
+            put(
+                "appUpdate",
+                JSONObject().apply {
+                    put("versionName", rel.versionName)
+                    put("apkDownloadUrl", rel.apkDownloadUrl)
+                    put("releaseNotes", rel.releaseNotes)
+                    put("forceUpdate", rel.forceUpdate)
+                    put("targetAccount", rel.targetAccount)
+                    put("publishedAt", rel.publishedAt)
+                }
+            )
+            put(
+                "clientConfig",
+                JSONObject().apply {
+                    put("allowNewRegistration", cfg.allowNewRegistration)
+                    put("requireVerificationCode", cfg.requireVerificationCode)
+                    put("remoteMaintenanceLock", cfg.remoteMaintenanceLock)
+                    put("announcementBanner", cfg.announcementBanner)
+                }
+            )
         }.toString(2)
     }
 
-    fun importFullBackupJson(jsonText: String): Result<Int> {
-        return runCatching {
-            val root = JSONObject(jsonText)
-            val accArr = root.optJSONArray("accounts") ?: JSONArray(jsonText)
-            prefs.edit().putString("accounts_json", accArr.toString()).commit()
-            runCatching { vaultFile.writeText(accArr.toString(), Charsets.UTF_8) }
-            root.optJSONArray("reminders")?.let {
-                prefs.edit().putString("reminders_json", it.toString()).commit()
-            }
-            root.optJSONArray("feedback")?.let {
-                prefs.edit().putString("feedback_json", it.toString()).commit()
-            }
-            accArr.length()
-        }
-    }
-
-    fun clearAllVaultData() {
-        prefs.edit()
-            .remove("accounts_json")
-            .remove("reminders_json")
-            .remove("feedback_json")
-            .commit()
-        runCatching { if (vaultFile.exists()) vaultFile.delete() }
-    }
-
-    suspend fun syncWithCloudEndpoint(): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun pushSyncToCloud(): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             val endpoint = getCloudSyncUrl().trim()
             if (endpoint.isEmpty()) {
-                return@runCatching "يەرلىك ئامباردا مۇۋەپپەقىيەتلىك ساقلاندى (بۇلۇت ئادرېسى تەڭشەلمىگەن)"
+                return@runCatching "LOCAL_SAVED"
             }
             val targetUrl = if (endpoint.endsWith(".json")) endpoint else "$endpoint/hesabat_sync.json"
             val conn = (URL(targetUrl).openConnection() as HttpURLConnection).apply {
@@ -405,55 +391,16 @@ class AdminVaultStorage(private val context: Context) {
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
             }
             conn.outputStream.use { out ->
-                out.write(buildFullBackupJson().toByteArray(Charsets.UTF_8))
+                out.write(buildSyncPayloadJson().toByteArray(Charsets.UTF_8))
             }
             val code = conn.responseCode
-            if (code in 200..299) {
-                "بۇلۇت سۇپىسى بىلەن مۇۋەپپەقىيەتلىك ماس قەدەملەندى!"
-            } else {
-                "يەرلىكتە ساقلاندى (بۇلۇت جاۋاب كودى: $code)"
-            }
+            if (code in 200..299) "CLOUD_OK" else "HTTP_$code"
         }
     }
 
-    private fun createInitialSampleAccounts(): List<ClientAccountRecord> {
-        val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
-        return listOf(
-            ClientAccountRecord(
-                id = UUID.randomUUID().toString(),
-                fullName = "ئالىمجان مەمەت",
-                username = "alim01",
-                password = "123456",
-                email = "alim01@gmail.com",
-                streetName = "ئىتتىپاق كوچىسى",
-                houseNumber = "12-ئۆي",
-                flowAmount = "100 GB",
-                openDate = today,
-                notes = "پالانى ئىسىملىك ھېسابات تىزىملاپ كىرمەكچى (تەستىق كۈتۈۋاتىدۇ)",
-                status = "PENDING",
-                licenseCode = generateVerificationCode("alim01", false),
-                isVip = false,
-                vipExpireEpochMillis = 0L,
-                paidMonths = List(12) { it < 3 }
-            ),
-            ClientAccountRecord(
-                id = UUID.randomUUID().toString(),
-                fullName = "پەرىدە خانىم",
-                username = "parida",
-                password = "654321",
-                email = "parida@gmail.com",
-                streetName = "بوستان كوچىسى",
-                houseNumber = "8-ئۆي",
-                flowAmount = "200 GB",
-                openDate = today,
-                notes = "VIP خېرىدار — كودسىز بىۋاسىتە كىرەلەيدۇ",
-                status = "VIP",
-                licenseCode = generateVerificationCode("parida", true),
-                isVip = true,
-                vipExpireEpochMillis = System.currentTimeMillis() + 30L * 24L * 3600L * 1000L,
-                paidMonths = List(12) { true }
-            )
-        )
+    fun clearAllData() {
+        prefs.edit().remove("accounts_json").commit()
+        runCatching { if (dbFile.exists()) dbFile.delete() }
     }
 
     private fun sha256(input: String): String {
@@ -462,589 +409,645 @@ class AdminVaultStorage(private val context: Context) {
     }
 }
 
-enum class AdminNavTab(val label: String, val icon: ImageVector) {
-    HOME("باش بەت", Icons.Filled.Dashboard),
-    APPROVALS("تەستىق ۋە كود", Icons.Filled.VerifiedUser),
-    ACCOUNTS("ھېساباتلار", Icons.Filled.Group),
-    VIP("VIP مۇددىتى", Icons.Filled.WorkspacePremium),
-    VAULT("ئەسلەتمە/ئامبار", Icons.Filled.Storage)
+enum class AdminTab(val ugTitle: String, val arTitle: String, val icon: ImageVector) {
+    HOME("باش بەت", "الرئيسية", Icons.Filled.Home),
+    OPEN_ACCOUNT("ھېسابات ئېچىش", "فتح حساب", Icons.Filled.PersonAdd),
+    VIP_CENTER("VIP ئەزالار", "أعضاء VIP", Icons.Filled.WorkspacePremium),
+    UPDATE_PUSH("نەشر يوللاش", "تحديث التطبيق", Icons.Filled.SystemUpdate),
+    SETTINGS("تەڭشەكلەر", "الإعدادات", Icons.Filled.Settings)
+}
+
+enum class HomeAccountListFilter {
+    NONE,
+    VIP_MEMBERS,
+    ALL_OPENED_ACCOUNTS
 }
 
 @Composable
-fun AdminRootApp() {
+fun AdminBrandLogo(
+    customLogo: ImageBitmap?,
+    sizeDp: Int = 72
+) {
+    if (customLogo != null) {
+        Image(
+            bitmap = customLogo,
+            contentDescription = "Admin Logo",
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .size(sizeDp.dp)
+                .clip(RoundedCornerShape((sizeDp / 3).dp))
+                .border(2.dp, WolfGold, RoundedCornerShape((sizeDp / 3).dp))
+        )
+    } else {
+        Image(
+            painter = painterResource(id = R.drawable.ic_admin_logo),
+            contentDescription = "Wolf Admin Logo",
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .size(sizeDp.dp)
+                .clip(RoundedCornerShape((sizeDp / 3).dp))
+                .border(2.dp, WolfGold, RoundedCornerShape((sizeDp / 3).dp))
+        )
+    }
+}
+
+@Composable
+fun AdminRootScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
     val snackbarHostState = remember { SnackbarHostState() }
-    val vault = remember { AdminVaultStorage(context.applicationContext) }
+    val storage = remember { AdminStorageEngine(context.applicationContext) }
 
+    var lang by remember { mutableStateOf(storage.getLanguage()) }
+    var isDark by remember { mutableStateOf(storage.isDarkMode()) }
     var isAuthenticated by remember { mutableStateOf(false) }
-    var currentTab by remember { mutableStateOf(AdminNavTab.HOME) }
 
-    var accounts by remember { mutableStateOf(vault.loadAccounts()) }
-    var reminders by remember { mutableStateOf(vault.loadReminders()) }
-    var feedbacks by remember { mutableStateOf(vault.loadFeedbackMessages()) }
-
-    // ئىزدەش بېتى ھالىتى
-    var isSearchPageOpen by remember { mutableStateOf(false) }
+    var currentTab by remember { mutableStateOf(AdminTab.HOME) }
+    var homeFilterOverlay by remember { mutableStateOf(HomeAccountListFilter.NONE) }
     var searchQuery by remember { mutableStateOf("") }
 
-    // يېڭى ھېسابات قوشۇش / تەھرىرلەش دىئالوگى
-    var showAccountEditor by remember { mutableStateOf(false) }
-    var editingAccount by remember { mutableStateOf<ClientAccountRecord?>(null) }
+    var accounts by remember { mutableStateOf(storage.loadAccounts()) }
+    var latestRelease by remember { mutableStateOf(storage.loadLatestRelease()) }
+    var clientConfig by remember { mutableStateOf(storage.loadClientControlConfig()) }
 
-    // ھەقىقىي ۋاقىتلىق تور تېزلىكى ئۆلچىگۈچ
-    var liveSpeedText by remember { mutableStateOf("0.0 KB/s") }
-    LaunchedEffect(Unit) {
-        var lastRx = TrafficStats.getTotalRxBytes()
-        var lastTx = TrafficStats.getTotalTxBytes()
-        while (true) {
-            delay(1000L)
-            val nowRx = TrafficStats.getTotalRxBytes()
-            val nowTx = TrafficStats.getTotalTxBytes()
-            val delta = ((nowRx - lastRx) + (nowTx - lastTx)).coerceAtLeast(0L)
-            lastRx = nowRx
-            lastTx = nowTx
-            liveSpeedText = if (delta >= 1024 * 1024) {
-                String.format(Locale.US, "%.2f MB/s", delta / (1024f * 1024f))
-            } else {
-                String.format(Locale.US, "%.1f KB/s", delta / 1024f)
-            }
-        }
-    }
+    var customBg by remember { mutableStateOf(storage.loadBackgroundBitmap()) }
+    var customLogo by remember { mutableStateOf(storage.loadLogoBitmap()) }
 
-    val saveAndUpdateAccounts: (List<ClientAccountRecord>) -> Unit = { updated ->
+    val bgColor = if (isDark) Color(0xFF070B16) else Color(0xFFF8FAFC)
+    val cardColor = if (isDark) Color(0xE6111A2E) else Color(0xF2FFFFFF)
+    val textColor = if (isDark) Color.White else Color(0xFF0F172A)
+
+    val saveAndSyncAccounts: (List<ManagedUserAccount>) -> Unit = { updated ->
         accounts = updated
-        vault.saveAccounts(updated)
+        storage.saveAccounts(updated)
+        scope.launch { storage.pushSyncToCloud() }
     }
 
-    val sendEmailToClient: (String, String, String) -> Unit = { targetEmail, subject, body ->
+    val sendViaMasterGmail: (String, String, String) -> Unit = { targetGmail, subject, body ->
         runCatching {
+            val recipient = targetGmail.trim().ifBlank { ADMIN_MASTER_EMAIL }
             val intent = Intent(Intent.ACTION_SENDTO).apply {
-                data = Uri.parse("mailto:${targetEmail.ifBlank { ADMIN_MASTER_EMAIL }}")
+                data = Uri.parse("mailto:$recipient")
+                putExtra(Intent.EXTRA_EMAIL, arrayOf(recipient, ADMIN_MASTER_EMAIL))
                 putExtra(Intent.EXTRA_SUBJECT, subject)
                 putExtra(Intent.EXTRA_TEXT, body)
             }
-            context.startActivity(Intent.createChooser(intent, "ئېلخەت ئارقىلىق ئەۋەتىش"))
+            context.startActivity(Intent.createChooser(intent, tr(lang, "Gmail ئارقىلىق يوللاش", "إرسال عبر Gmail")))
         }
     }
 
-    if (!isAuthenticated) {
-        AdminLoginPortal(
-            onVerifyPassword = { pwd ->
-                if (vault.verifyAdminPassword(pwd)) {
-                    isAuthenticated = true
-                    true
-                } else {
-                    false
-                }
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+        MaterialTheme(
+            colorScheme = if (isDark) {
+                darkColorScheme(
+                    primary = WolfGold,
+                    secondary = AdminTurquoise,
+                    background = bgColor,
+                    surface = cardColor,
+                    onSurface = textColor,
+                    onBackground = textColor
+                )
+            } else {
+                lightColorScheme(
+                    primary = AdminIndigo,
+                    secondary = AdminTurquoise,
+                    background = bgColor,
+                    surface = cardColor,
+                    onSurface = textColor,
+                    onBackground = textColor
+                )
             }
-        )
-    } else {
-        if (isSearchPageOpen) {
-            BackHandler { isSearchPageOpen = false }
-            DedicatedAdminSearchPage(
-                allAccounts = accounts,
-                query = searchQuery,
-                onQueryChange = { searchQuery = it },
-                onBack = { isSearchPageOpen = false },
-                onCopyText = { label, text ->
-                    clipboard.setText(AnnotatedString(text))
-                    scope.launch { snackbarHostState.showSnackbar("$label كۆچۈرۈلدى: $text") }
-                },
-                onToggleMonth = { acc, monthIdx ->
-                    val updatedMonths = acc.paidMonths.toMutableList().also {
-                        it[monthIdx] = !it[monthIdx]
-                    }
-                    saveAndUpdateAccounts(
-                        accounts.map { if (it.id == acc.id) it.copy(paidMonths = updatedMonths) else it }
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                if (customBg != null) {
+                    Image(
+                        bitmap = customBg!!,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
                     )
-                },
-                onEditAccount = { acc ->
-                    editingAccount = acc
-                    showAccountEditor = true
-                },
-                onDeleteAccount = { acc ->
-                    saveAndUpdateAccounts(accounts.filterNot { it.id == acc.id })
-                    scope.launch { snackbarHostState.showSnackbar("«${acc.fullName}» ھېساباتى ئۆچۈرۈلدى") }
-                }
-            )
-        } else {
-            Scaffold(
-                containerColor = AdminDarkBg,
-                snackbarHost = { SnackbarHost(snackbarHostState) },
-                bottomBar = {
-                    NavigationBar(
-                        containerColor = Color(0xFF0D1528),
-                        tonalElevation = 8.dp
-                    ) {
-                        AdminNavTab.entries.forEach { tab ->
-                            val pendingCount = accounts.count { it.status == "PENDING" }
-                            NavigationBarItem(
-                                selected = currentTab == tab,
-                                onClick = { currentTab = tab },
-                                icon = {
-                                    BadgedBox(
-                                        badge = {
-                                            if (tab == AdminNavTab.APPROVALS && pendingCount > 0) {
-                                                Badge(containerColor = AdminRose) {
-                                                    Text("$pendingCount", color = Color.White)
-                                                }
-                                            }
-                                        }
-                                    ) {
-                                        Icon(tab.icon, contentDescription = tab.label)
-                                    }
-                                },
-                                label = {
-                                    Text(
-                                        text = tab.label,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = if (currentTab == tab) FontWeight.ExtraBold else FontWeight.Normal
-                                    )
-                                }
-                            )
-                        }
-                    }
-                },
-                floatingActionButton = {
-                    if (currentTab == AdminNavTab.ACCOUNTS || currentTab == AdminNavTab.HOME) {
-                        ExtendedFloatingActionButton(
-                            onClick = {
-                                editingAccount = null
-                                showAccountEditor = true
-                            },
-                            containerColor = AdminIndigo,
-                            contentColor = Color.White,
-                            icon = { Icon(Icons.Filled.PersonAdd, contentDescription = null) },
-                            text = { Text("يېڭى ھېسابات قوشۇش", fontWeight = FontWeight.Bold) }
-                        )
-                    }
-                }
-            ) { innerPadding ->
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding)
-                        .padding(horizontal = 16.dp)
-                ) {
-                    // ئۈستى قىسىم: باشقۇرغۇچى نامى، ئېلخەت ۋە تور ئېقىم ئۆلچىگۈچ
-                    Surface(
+                    Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 10.dp, bottom = 10.dp),
-                        shape = RoundedCornerShape(22.dp),
-                        color = AdminCardSurface,
-                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.14f))
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(44.dp)
-                                        .clip(RoundedCornerShape(14.dp))
-                                        .background(Brush.linearGradient(listOf(AdminIndigo, AdminTurquoise))),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(Icons.Filled.Shield, contentDescription = null, tint = Color.White)
+                            .fillMaxSize()
+                            .background(if (isDark) Color(0xAA050914) else Color(0x88FFFFFF))
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.verticalGradient(
+                                    if (isDark) listOf(Color(0xFF070B16), Color(0xFF101935), Color(0xFF060913))
+                                    else listOf(Color(0xFFFEF9C3), Color(0xFFF1F5F9), Color(0xFFE2E8F0))
+                                )
+                            )
+                    )
+                }
+
+                if (!isAuthenticated) {
+                    // مەخپىي نومۇر ئەسكەرتىشى يوق پاكىز كىرىش بېتى
+                    AdminCleanLoginScreen(
+                        lang = lang,
+                        cardColor = cardColor,
+                        textColor = textColor,
+                        customLogo = customLogo,
+                        onSwitchLang = { newLang ->
+                            lang = newLang
+                            storage.setLanguage(newLang)
+                        },
+                        onVerify = { inputPwd ->
+                            val ok = storage.verifyAdminPassword(inputPwd)
+                            if (ok) isAuthenticated = true
+                            ok
+                        }
+                    )
+                } else {
+                    if (homeFilterOverlay != HomeAccountListFilter.NONE) {
+                        BackHandler { homeFilterOverlay = HomeAccountListFilter.NONE }
+                        HomeFilteredAccountsPage(
+                            lang = lang,
+                            filter = homeFilterOverlay,
+                            accounts = accounts,
+                            searchQuery = searchQuery,
+                            cardColor = cardColor,
+                            textColor = textColor,
+                            onSearchChange = { searchQuery = it },
+                            onBack = { homeFilterOverlay = HomeAccountListFilter.NONE },
+                            onCopyCode = { code ->
+                                clipboard.setText(AnnotatedString(code))
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(tr(lang, "كود كۆچۈرۈلدى: $code", "تم نسخ الرمز: $code"))
                                 }
-                                Column {
-                                    Text(
-                                        text = "باش باشقۇرغۇچى مەركىزى",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.ExtraBold
-                                    )
-                                    Text(
-                                        text = ADMIN_MASTER_EMAIL,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = AdminTurquoise
-                                    )
+                            },
+                            onSendGmail = { acc ->
+                                sendViaMasterGmail(
+                                    acc.gmail,
+                                    tr(lang, "Hesabat ھېسابات دەلىللەش كودىڭىز", "رمز تفعيل حساب Hesabat"),
+                                    buildString {
+                                        appendLine(tr(lang, "ھۆرمەتلىك ${acc.fullName}،", "عزيزي ${acc.fullName}،"))
+                                        appendLine(tr(lang, "باشقۇرغۇچى ($ADMIN_MASTER_EMAIL) تەرىپىدىن ھېساباتىڭىز ئېچىلدى:", "تم فتح حسابك بواسطة المسؤول ($ADMIN_MASTER_EMAIL):"))
+                                        appendLine("• ${tr(lang, "ھېسابات نامى", "اسم الحساب")}: ${acc.username}")
+                                        appendLine("• ${tr(lang, "مەخپىي نومۇر", "كلمة المرور")}: ${acc.password}")
+                                        appendLine("• ${tr(lang, "دەلىللەش كودى", "رمز التفعيل")}: ${acc.licenseCode}")
+                                    }
+                                )
+                            },
+                            onDelete = { acc ->
+                                saveAndSyncAccounts(accounts.filterNot { it.id == acc.id })
+                            }
+                        )
+                    } else {
+                        Scaffold(
+                            containerColor = Color.Transparent,
+                            snackbarHost = { SnackbarHost(snackbarHostState) },
+                            bottomBar = {
+                                NavigationBar(
+                                    containerColor = if (isDark) Color(0xF00B1120) else Color(0xF0FFFFFF),
+                                    tonalElevation = 10.dp
+                                ) {
+                                    AdminTab.entries.forEach { tab ->
+                                        NavigationBarItem(
+                                            selected = currentTab == tab,
+                                            onClick = { currentTab = tab },
+                                            icon = { Icon(tab.icon, contentDescription = null) },
+                                            label = {
+                                                Text(
+                                                    text = tr(lang, tab.ugTitle, tab.arTitle),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = if (currentTab == tab) FontWeight.ExtraBold else FontWeight.Normal
+                                                )
+                                            }
+                                        )
+                                    }
                                 }
                             }
-
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) { innerPadding ->
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(innerPadding)
+                                    .padding(horizontal = 16.dp)
                             ) {
+                                // ئۈستى قىسىم: بۆرە لوگوسى، باشقۇرغۇچى Gmail ئادرېسى ۋە چېكىنىش
                                 Surface(
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = AdminEmerald.copy(alpha = 0.18f),
-                                    border = BorderStroke(1.dp, AdminEmerald.copy(alpha = 0.45f))
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 10.dp, bottom = 10.dp),
+                                    shape = RoundedCornerShape(24.dp),
+                                    color = cardColor,
+                                    border = BorderStroke(1.2.dp, WolfGold.copy(alpha = 0.55f))
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                                         verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
-                                        Icon(Icons.Filled.Speed, contentDescription = null, tint = AdminEmerald, modifier = Modifier.size(14.dp))
-                                        Text(liveSpeedText, style = MaterialTheme.typography.labelSmall, color = AdminEmerald, fontWeight = FontWeight.Bold)
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            AdminBrandLogo(customLogo = customLogo, sizeDp = 46)
+                                            Column {
+                                                Text(
+                                                    text = tr(lang, "باش باشقۇرغۇچى سۇپىسى", "لوحة تحكم المسؤول"),
+                                                    style = MaterialTheme.typography.titleMedium,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    color = textColor
+                                                )
+                                                Text(
+                                                    text = ADMIN_MASTER_EMAIL,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = WolfGold,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        }
+
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            IconButton(
+                                                onClick = {
+                                                    isDark = !isDark
+                                                    storage.setDarkMode(isDark)
+                                                }
+                                            ) {
+                                                Icon(
+                                                    imageVector = if (isDark) Icons.Filled.LightMode else Icons.Filled.DarkMode,
+                                                    contentDescription = null,
+                                                    tint = WolfGold
+                                                )
+                                            }
+                                            IconButton(onClick = { isAuthenticated = false }) {
+                                                Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null, tint = AdminRose)
+                                            }
+                                        }
                                     }
                                 }
-                                IconButton(onClick = { isAuthenticated = false }) {
-                                    Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "چېكىنىش", tint = AdminRose)
+
+                                when (currentTab) {
+                                    AdminTab.HOME -> {
+                                        AdminCleanHomeTab(
+                                            lang = lang,
+                                            accounts = accounts,
+                                            searchQuery = searchQuery,
+                                            cardColor = cardColor,
+                                            textColor = textColor,
+                                            onSearchChange = { searchQuery = it },
+                                            onTriggerSearch = {
+                                                homeFilterOverlay = HomeAccountListFilter.ALL_OPENED_ACCOUNTS
+                                            },
+                                            onOpenVipMembers = {
+                                                searchQuery = ""
+                                                homeFilterOverlay = HomeAccountListFilter.VIP_MEMBERS
+                                            },
+                                            onOpenAllAccounts = {
+                                                searchQuery = ""
+                                                homeFilterOverlay = HomeAccountListFilter.ALL_OPENED_ACCOUNTS
+                                            },
+                                            onNavigateTab = { currentTab = it }
+                                        )
+                                    }
+
+                                    AdminTab.OPEN_ACCOUNT -> {
+                                        AdminOpenAccountTab(
+                                            lang = lang,
+                                            storage = storage,
+                                            accounts = accounts,
+                                            cardColor = cardColor,
+                                            textColor = textColor,
+                                            onAccountCreated = { newAcc, sendEmailNow ->
+                                                saveAndSyncAccounts(listOf(newAcc) + accounts)
+                                                clipboard.setText(AnnotatedString(newAcc.licenseCode))
+                                                scope.launch {
+                                                    snackbarHostState.showSnackbar(
+                                                        tr(
+                                                            lang,
+                                                            "ھېسابات ئېچىلدى ۋە كودى كۆچۈرۈلدى: ${newAcc.licenseCode}",
+                                                            "تم فتح الحساب ونسخ الرمز: ${newAcc.licenseCode}"
+                                                        )
+                                                    )
+                                                }
+                                                if (sendEmailNow) {
+                                                    sendViaMasterGmail(
+                                                        newAcc.gmail,
+                                                        tr(lang, "Hesabat يېڭى ھېسابات ۋە دەلىللەش كودىڭىز", "حساب Hesabat الجديد ورمز التفعيل"),
+                                                        buildString {
+                                                            appendLine(tr(lang, "ئەسسالامۇئەلەيكۇم ${newAcc.fullName}،", "السلام عليكم ${newAcc.fullName}،"))
+                                                            appendLine(tr(lang, "باشقۇرغۇچى ($ADMIN_MASTER_EMAIL) سىزگە ھېسابات ئېچىپ بەردى:", "قام المسؤول ($ADMIN_MASTER_EMAIL) بفتح حساب لك:"))
+                                                            appendLine("• ${tr(lang, "ھېسابات نامى", "اسم الحساب")}: ${newAcc.username}")
+                                                            appendLine("• ${tr(lang, "مەخپىي نومۇر", "كلمة المرور")}: ${newAcc.password}")
+                                                            appendLine("• ${tr(lang, "دەلىللەش كودى", "رمز التفعيل")}: ${newAcc.licenseCode}")
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                        )
+                                    }
+
+                                    AdminTab.VIP_CENTER -> {
+                                        AdminVipDurationTab(
+                                            lang = lang,
+                                            accounts = accounts,
+                                            storage = storage,
+                                            cardColor = cardColor,
+                                            textColor = textColor,
+                                            onUpdateVip = { targetAcc, days ->
+                                                val isVipNow = days > 0
+                                                val expireMillis = if (isVipNow) System.currentTimeMillis() + days.toLong() * 24L * 3600L * 1000L else 0L
+                                                val updatedCode = storage.generateVerificationCode(targetAcc.username, isVipNow)
+                                                saveAndSyncAccounts(
+                                                    accounts.map {
+                                                        if (it.id == targetAcc.id) {
+                                                            it.copy(
+                                                                isVip = isVipNow,
+                                                                vipExpireEpochMillis = expireMillis,
+                                                                status = if (isVipNow) "VIP" else "ACTIVE",
+                                                                licenseCode = updatedCode
+                                                            )
+                                                        } else it
+                                                    }
+                                                )
+                                                scope.launch {
+                                                    snackbarHostState.showSnackbar(
+                                                        if (isVipNow) tr(lang, "VIP مۇددىتى بېكىتىلدى ($days كۈن)", "تم تحديد مدة VIP ($days يوم)")
+                                                        else tr(lang, "VIP ھوقۇقى توختىتىلدى", "تم إيقاف VIP")
+                                                    )
+                                                }
+                                            }
+                                        )
+                                    }
+
+                                    AdminTab.UPDATE_PUSH -> {
+                                        AdminVersionPushTab(
+                                            lang = lang,
+                                            accounts = accounts,
+                                            latestRelease = latestRelease,
+                                            cardColor = cardColor,
+                                            textColor = textColor,
+                                            onPublishUpdate = { newRel ->
+                                                latestRelease = newRel
+                                                storage.saveLatestRelease(newRel)
+                                                scope.launch {
+                                                    storage.pushSyncToCloud()
+                                                    snackbarHostState.showSnackbar(
+                                                        tr(lang, "يېڭى نەشر (${newRel.versionName}) بارلىق ھېساباتلارغا يوللاندى!", "تم إرسال الإصدار الجديد (${newRel.versionName}) لجميع الحسابات!")
+                                                    )
+                                                }
+                                                val targetEmails = if (newRel.targetAccount == "ALL") {
+                                                    accounts.mapNotNull { it.gmail.takeIf { g -> g.contains("@") } }.joinToString(",")
+                                                } else {
+                                                    accounts.firstOrNull { it.username == newRel.targetAccount }?.gmail.orEmpty()
+                                                }
+                                                sendViaMasterGmail(
+                                                    targetEmails,
+                                                    tr(lang, "Hesabat ئەپىنىڭ يېڭى نەشرى (${newRel.versionName}) چىقتى!", "تحديث جديد لتطبيق Hesabat (${newRel.versionName})"),
+                                                    buildString {
+                                                        appendLine(tr(lang, "ھۆرمەتلىك ئىشلەتكۈچى،", "عزيزي المستخدم،"))
+                                                        appendLine(tr(lang, "ئەپنىڭ يېڭى نەشرى تارقىتىلدى:", "تم إصدار نسخة جديدة من التطبيق:"))
+                                                        appendLine("• ${tr(lang, "نەشر نومۇرى", "رقم الإصدار")}: ${newRel.versionName}")
+                                                        appendLine("• ${tr(lang, "چۈشۈرۈش ئادرېسى", "رابط التحميل")}: ${newRel.apkDownloadUrl}")
+                                                        appendLine("• ${tr(lang, "يېڭىلىقلار", "التفاصيل")}: ${newRel.releaseNotes}")
+                                                    }
+                                                )
+                                            }
+                                        )
+                                    }
+
+                                    AdminTab.SETTINGS -> {
+                                        AdminComprehensiveSettingsTab(
+                                            lang = lang,
+                                            isDark = isDark,
+                                            storage = storage,
+                                            clientConfig = clientConfig,
+                                            cardColor = cardColor,
+                                            textColor = textColor,
+                                            onLangChange = { newLang ->
+                                                lang = newLang
+                                                storage.setLanguage(newLang)
+                                            },
+                                            onDarkChange = { dark ->
+                                                isDark = dark
+                                                storage.setDarkMode(dark)
+                                            },
+                                            onPickBackground = { uri ->
+                                                if (storage.saveBackgroundFromUri(uri)) {
+                                                    customBg = storage.loadBackgroundBitmap()
+                                                }
+                                            },
+                                            onResetBackground = {
+                                                storage.clearBackground()
+                                                customBg = null
+                                            },
+                                            onPickLogo = { uri ->
+                                                if (storage.saveLogoFromUri(uri)) {
+                                                    customLogo = storage.loadLogoBitmap()
+                                                }
+                                            },
+                                            onSaveClientConfig = { newCfg ->
+                                                clientConfig = newCfg
+                                                storage.saveClientControlConfig(newCfg)
+                                                scope.launch {
+                                                    storage.pushSyncToCloud()
+                                                    snackbarHostState.showSnackbar(
+                                                        tr(lang, "ھېسابات ئەپى تەڭشەكلىرى يوللاندى!", "تم حفظ وإرسال إعدادات تطبيق الحسابات!")
+                                                    )
+                                                }
+                                            },
+                                            onClearAllAccounts = {
+                                                storage.clearAllData()
+                                                accounts = emptyList()
+                                                scope.launch {
+                                                    snackbarHostState.showSnackbar(
+                                                        tr(lang, "بارلىق ھېساباتلار پاكىز تازىلاندى!", "تم مسح جميع الحسابات!")
+                                                    )
+                                                }
+                                            },
+                                            onShowNotice = { msg ->
+                                                scope.launch { snackbarHostState.showSnackbar(msg) }
+                                            }
+                                        )
+                                    }
                                 }
                             }
-                        }
-                    }
-
-                    // 5 بەتنىڭ مەزمۇنى
-                    when (currentTab) {
-                        AdminNavTab.HOME -> {
-                            AdminHomeTabContent(
-                                accounts = accounts,
-                                searchQuery = searchQuery,
-                                onSearchQueryChange = { searchQuery = it },
-                                onOpenSearchPage = { queryText ->
-                                    searchQuery = queryText
-                                    isSearchPageOpen = true
-                                },
-                                onQuickNavigate = { targetTab -> currentTab = targetTab }
-                            )
-                        }
-
-                        AdminNavTab.APPROVALS -> {
-                            AdminApprovalsAndCodesTab(
-                                accounts = accounts,
-                                vault = vault,
-                                onApproveAndGenerateCode = { acc, isVip ->
-                                    val newCode = vault.generateVerificationCode(acc.username, isVip)
-                                    val newStatus = if (isVip) "VIP" else "APPROVED"
-                                    val expireMillis = if (isVip) System.currentTimeMillis() + 30L * 24L * 3600L * 1000L else 0L
-                                    saveAndUpdateAccounts(
-                                        accounts.map {
-                                            if (it.id == acc.id) {
-                                                it.copy(
-                                                    status = newStatus,
-                                                    licenseCode = newCode,
-                                                    isVip = isVip,
-                                                    vipExpireEpochMillis = expireMillis
-                                                )
-                                            } else it
-                                        }
-                                    )
-                                    clipboard.setText(AnnotatedString(newCode))
-                                    scope.launch {
-                                        snackbarHostState.showSnackbar("«${acc.username}» تەستىقلىنىپ كودى كۆچۈرۈلدى: $newCode")
-                                    }
-                                },
-                                onPreCreateUserWithCode = { fullName, username, password, street, house, isVip ->
-                                    val code = vault.generateVerificationCode(username, isVip)
-                                    val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
-                                    val newAcc = ClientAccountRecord(
-                                        id = UUID.randomUUID().toString(),
-                                        fullName = fullName.ifBlank { username },
-                                        username = username.trim(),
-                                        password = password.ifBlank { "123456" },
-                                        email = if (username.contains("@")) username else "$username@gmail.com",
-                                        streetName = street,
-                                        houseNumber = house,
-                                        flowAmount = "100 GB",
-                                        openDate = today,
-                                        notes = "باشقۇرغۇچى تەرىپىدىن ئېچىپ بېرىلگەن ھېسابات",
-                                        status = if (isVip) "VIP" else "APPROVED",
-                                        licenseCode = code,
-                                        isVip = isVip,
-                                        vipExpireEpochMillis = if (isVip) System.currentTimeMillis() + 30L * 24L * 3600L * 1000L else 0L,
-                                        paidMonths = List(12) { false }
-                                    )
-                                    saveAndUpdateAccounts(listOf(newAcc) + accounts)
-                                    clipboard.setText(AnnotatedString(code))
-                                    scope.launch {
-                                        snackbarHostState.showSnackbar("ھېسابات قۇرۇلدى ۋە كودى كۆچۈرۈلدى: $code")
-                                    }
-                                },
-                                onSendCodeByEmail = { acc ->
-                                    val code = acc.licenseCode.ifBlank { vault.generateVerificationCode(acc.username, acc.isVip) }
-                                    sendEmailToClient(
-                                        acc.email,
-                                        "Hesabat ئەپىگە كىرىش دەلىللەش كودىڭىز",
-                                        "ھۆرمەتلىك ${acc.fullName}،\n\nسىزنىڭ ھېسابات ئىسمىڭىز: ${acc.username}\nدەلىللەش كودىڭىز: $code\n\nمۇشۇ كودنى كىرگۈزۈپ ئەپكە كىرەلەيسىز."
-                                    )
-                                },
-                                onCopyCode = { code ->
-                                    clipboard.setText(AnnotatedString(code))
-                                    scope.launch { snackbarHostState.showSnackbar("دەلىللەش كودى كۆچۈرۈلدى: $code") }
-                                }
-                            )
-                        }
-
-                        AdminNavTab.ACCOUNTS -> {
-                            AdminAllAccountsTab(
-                                accounts = accounts,
-                                onSearchClick = {
-                                    searchQuery = ""
-                                    isSearchPageOpen = true
-                                },
-                                onToggleMonth = { acc, mIdx ->
-                                    val updatedMonths = acc.paidMonths.toMutableList().also {
-                                        it[mIdx] = !it[mIdx]
-                                    }
-                                    saveAndUpdateAccounts(
-                                        accounts.map { if (it.id == acc.id) it.copy(paidMonths = updatedMonths) else it }
-                                    )
-                                },
-                                onEdit = { acc ->
-                                    editingAccount = acc
-                                    showAccountEditor = true
-                                },
-                                onDelete = { acc ->
-                                    saveAndUpdateAccounts(accounts.filterNot { it.id == acc.id })
-                                    scope.launch { snackbarHostState.showSnackbar("«${acc.fullName}» ئۆچۈرۈلدى") }
-                                },
-                                onCopy = { label, value ->
-                                    clipboard.setText(AnnotatedString(value))
-                                    scope.launch { snackbarHostState.showSnackbar("$label كۆچۈرۈلدى") }
-                                }
-                            )
-                        }
-
-                        AdminNavTab.VIP -> {
-                            AdminVipManagementTab(
-                                accounts = accounts,
-                                vault = vault,
-                                onSetVipDuration = { acc, days ->
-                                    val expireTime = if (days <= 0) 0L else System.currentTimeMillis() + days.toLong() * 24L * 3600L * 1000L
-                                    val vipCode = vault.generateVerificationCode(acc.username, days > 0)
-                                    saveAndUpdateAccounts(
-                                        accounts.map {
-                                            if (it.id == acc.id) {
-                                                it.copy(
-                                                    isVip = days > 0,
-                                                    status = if (days > 0) "VIP" else "APPROVED",
-                                                    vipExpireEpochMillis = expireTime,
-                                                    licenseCode = vipCode
-                                                )
-                                            } else it
-                                        }
-                                    )
-                                    scope.launch {
-                                        val msg = if (days > 0) "«${acc.fullName}» غا $days كۈنلۈك VIP بېكىتىلدى (كودسىز كىرەلەيدۇ)" else "VIP بىكار قىلىندى"
-                                        snackbarHostState.showSnackbar(msg)
-                                    }
-                                }
-                            )
-                        }
-
-                        AdminNavTab.VAULT -> {
-                            AdminVaultAndCommunicationTab(
-                                vault = vault,
-                                reminders = reminders,
-                                feedbacks = feedbacks,
-                                onSendReminder = { title, content, target ->
-                                    val newRem = BroadcastReminder(
-                                        id = UUID.randomUUID().toString(),
-                                        title = title,
-                                        content = content,
-                                        targetUsername = target.ifBlank { "ALL" },
-                                        timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date())
-                                    )
-                                    val updated = listOf(newRem) + reminders
-                                    reminders = updated
-                                    vault.saveReminders(updated)
-                                    scope.launch { snackbarHostState.showSnackbar("ئەسلەتمە يوللاندى!") }
-                                },
-                                onReplyFeedback = { msgItem, replyText ->
-                                    val updated = feedbacks.map {
-                                        if (it.id == msgItem.id) it.copy(adminReply = replyText) else it
-                                    }
-                                    feedbacks = updated
-                                    vault.saveFeedbackMessages(updated)
-                                    sendEmailToClient(
-                                        "${msgItem.clientUsername}@gmail.com",
-                                        "Hesabat باشقۇرغۇچىدىن جاۋاب",
-                                        replyText
-                                    )
-                                    scope.launch { snackbarHostState.showSnackbar("جاۋاب ساقلاندى ۋە يوللاندى!") }
-                                },
-                                onClearAllVault = {
-                                    vault.clearAllVaultData()
-                                    accounts = emptyList()
-                                    reminders = emptyList()
-                                    feedbacks = emptyList()
-                                    scope.launch { snackbarHostState.showSnackbar("ئەپ ئىچىدىكى بارلىق مەلۇماتلار پاكىز تازىلاندى!") }
-                                },
-                                onReloadAccounts = {
-                                    accounts = vault.loadAccounts()
-                                    reminders = vault.loadReminders()
-                                    feedbacks = vault.loadFeedbackMessages()
-                                },
-                                onShowMessage = { msg ->
-                                    scope.launch { snackbarHostState.showSnackbar(msg) }
-                                }
-                            )
                         }
                     }
                 }
             }
         }
-    }
-
-    if (showAccountEditor) {
-        AccountEditorDialog(
-            initial = editingAccount,
-            vault = vault,
-            onDismiss = {
-                showAccountEditor = false
-                editingAccount = null
-            },
-            onSave = { record ->
-                val exists = accounts.any { it.id == record.id }
-                val updated = if (exists) {
-                    accounts.map { if (it.id == record.id) record else it }
-                } else {
-                    listOf(record) + accounts
-                }
-                saveAndUpdateAccounts(updated)
-                showAccountEditor = false
-                editingAccount = null
-                scope.launch { snackbarHostState.showSnackbar("ھېسابات مەلۇماتى ساقلاندى!") }
-            }
-        )
     }
 }
 
+/**
+ * مەخپىي نومۇر ئەسكەرتىشى پۈتۈنلەي چىقىرىۋېتىلگەن كىرىش ئېكرانى
+ */
 @Composable
-fun AdminLoginPortal(onVerifyPassword: (String) -> Boolean) {
+fun AdminCleanLoginScreen(
+    lang: AdminLanguage,
+    cardColor: Color,
+    textColor: Color,
+    customLogo: ImageBitmap?,
+    onSwitchLang: (AdminLanguage) -> Unit,
+    onVerify: (String) -> Boolean
+) {
     var password by remember { mutableStateOf("") }
-    var showPwd by remember { mutableStateOf(false) }
-    var errorMsg by remember { mutableStateOf<String?>(null) }
+    var showPassword by remember { mutableStateOf(false) }
+    var errorText by remember { mutableStateOf<String?>(null) }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(AdminDarkBg, Color(0xFF101D3B)))),
+            .padding(20.dp),
         contentAlignment = Alignment.Center
     ) {
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .widthIn(max = 430.dp)
-                .padding(20.dp),
-            shape = RoundedCornerShape(28.dp),
-            color = AdminCardSurface,
-            border = BorderStroke(1.5.dp, AdminTurquoise.copy(alpha = 0.45f))
+                .widthIn(max = 430.dp),
+            shape = RoundedCornerShape(30.dp),
+            color = cardColor,
+            border = BorderStroke(1.8.dp, WolfGold)
         ) {
             Column(
                 modifier = Modifier.padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(72.dp)
-                        .clip(RoundedCornerShape(22.dp))
-                        .background(Brush.linearGradient(listOf(AdminIndigo, AdminTurquoise))),
-                    contentAlignment = Alignment.Center
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
                 ) {
-                    Icon(Icons.Filled.AdminPanelSettings, contentDescription = null, tint = Color.White, modifier = Modifier.size(40.dp))
+                    AdminLanguage.entries.forEach { l ->
+                        FilterChip(
+                            selected = lang == l,
+                            onClick = { onSwitchLang(l) },
+                            label = { Text(l.title) },
+                            modifier = Modifier.padding(start = 6.dp)
+                        )
+                    }
                 }
 
+                AdminBrandLogo(customLogo = customLogo, sizeDp = 88)
+
                 Text(
-                    text = "Hesabat باشقۇرغۇچى مەركىزى",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.ExtraBold
-                )
-                Text(
-                    text = "بارلىق ھېساباتلارنى تەستىقلاش، دەلىللەش كودى ئەۋەتىش ۋە VIP مۇددىتى بەلگىلەش سۇپىسى",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.LightGray,
-                    textAlign = TextAlign.Center
+                    text = tr(lang, "باشقۇرغۇچى مەركىزى", "مركز تحكم المسؤول"),
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = textColor
                 )
 
+                Text(
+                    text = ADMIN_MASTER_EMAIL,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = WolfGold,
+                    fontWeight = FontWeight.Bold
+                )
+
+                // ھېچقانداق مەخپىي نومۇر ئەسكەرتىشى يوق!
                 OutlinedTextField(
                     value = password,
                     onValueChange = {
                         password = it
-                        errorMsg = null
+                        errorText = null
                     },
-                    label = { Text("باشقۇرغۇچى مەخپىي نومۇرى (162142)") },
-                    leadingIcon = { Icon(Icons.Filled.Key, contentDescription = null, tint = AdminTurquoise) },
+                    label = { Text(tr(lang, "باشقۇرغۇچى مەخپىي نومۇرى", "كلمة مرور المسؤول")) },
+                    leadingIcon = { Icon(Icons.Filled.Lock, contentDescription = null, tint = WolfGold) },
                     trailingIcon = {
-                        IconButton(onClick = { showPwd = !showPwd }) {
-                            Icon(if (showPwd) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, contentDescription = null)
+                        IconButton(onClick = { showPassword = !showPassword }) {
+                            Icon(
+                                imageVector = if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                contentDescription = null
+                            )
                         }
                     },
-                    visualTransformation = if (showPwd) VisualTransformation.None else PasswordVisualTransformation(),
+                    visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
                     singleLine = true,
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                if (errorMsg != null) {
-                    Text(errorMsg.orEmpty(), color = AdminRose, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                if (errorText != null) {
+                    Text(
+                        text = errorText.orEmpty(),
+                        color = AdminRose,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
 
                 Button(
                     onClick = {
-                        if (!onVerifyPassword(password)) {
-                            errorMsg = "مەخپىي نومۇر خاتا! (دەسلەپكى نومۇر: 162142)"
+                        if (!onVerify(password)) {
+                            errorText = tr(lang, "مەخپىي نومۇر خاتا!", "كلمة المرور غير صحيحة!")
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = AdminIndigo),
+                    colors = ButtonDefaults.buttonColors(containerColor = WolfGold),
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(52.dp)
                 ) {
-                    Icon(Icons.Filled.LockOpen, contentDescription = null, tint = Color.White)
+                    Icon(Icons.Filled.Login, contentDescription = null, tint = WolfBlack)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("باشقۇرغۇچى سۈپىتىدە كىرىش", fontWeight = FontWeight.Bold, color = Color.White)
+                    Text(
+                        text = tr(lang, "دەلىللەپ كىرىش", "تسجيل الدخول"),
+                        color = WolfBlack,
+                        fontWeight = FontWeight.ExtraBold,
+                        style = MaterialTheme.typography.titleMedium
+                    )
                 }
             }
         }
     }
 }
 
+/**
+ * باش بەت: پەقەت «VIP ئەزالار» ۋە «ھېسابات ئاچقانلار» سىنبەلگىلىك كارتىسى + ئىزدەش رامكىسى
+ * (قەرز تۆلىگەنلەر ۋە ئايلىق ئاچقۇزغانلار چىقىرىۋېتىلدى)
+ */
 @Composable
-fun AdminHomeTabContent(
-    accounts: List<ClientAccountRecord>,
+fun AdminCleanHomeTab(
+    lang: AdminLanguage,
+    accounts: List<ManagedUserAccount>,
     searchQuery: String,
-    onSearchQueryChange: (String) -> Unit,
-    onOpenSearchPage: (String) -> Unit,
-    onQuickNavigate: (AdminNavTab) -> Unit
+    cardColor: Color,
+    textColor: Color,
+    onSearchChange: (String) -> Unit,
+    onTriggerSearch: () -> Unit,
+    onOpenVipMembers: () -> Unit,
+    onOpenAllAccounts: () -> Unit,
+    onNavigateTab: (AdminTab) -> Unit
 ) {
-    val totalCount = accounts.size
-    val pendingCount = accounts.count { it.status == "PENDING" }
-    val paidCount = accounts.count { it.paidCount() == 12 }
-    val debtCount = accounts.count { it.paidCount() < 12 }
     val vipCount = accounts.count { it.isVipActive() }
+    val totalOpenedCount = accounts.size
 
     LazyColumn(
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
         contentPadding = PaddingValues(bottom = 84.dp)
     ) {
-        // ئىزدەش رامكىسى (ئىسمى، كوچىسى، ئادرېسى ياكى ھېسابات ئىسمى بويىچە يېڭى بەتتە ئىزدەيدۇ)
+        // ئىزدەش رامكىسى
         item {
             Surface(
                 shape = RoundedCornerShape(22.dp),
-                color = AdminCardSurface,
-                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.14f))
+                color = cardColor,
+                border = BorderStroke(1.dp, WolfGold.copy(alpha = 0.35f))
             ) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(modifier = Modifier.padding(14.dp)) {
                     OutlinedTextField(
                         value = searchQuery,
-                        onValueChange = onSearchQueryChange,
-                        placeholder = { Text("ئىسىم، كوچا، ئادرېس ياكى ھېسابات ئىسمىنى يېزىڭ...") },
-                        leadingIcon = {
-                            Icon(Icons.Filled.Search, contentDescription = null, tint = AdminTurquoise)
+                        onValueChange = onSearchChange,
+                        placeholder = {
+                            Text(tr(lang, "Gmail، ئىسىم ياكى ھېسابات نامى بويىچە ئىزدەش...", "البحث عبر Gmail أو الاسم أو الحساب..."))
                         },
+                        leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = WolfGold) },
                         trailingIcon = {
                             Button(
-                                onClick = { onOpenSearchPage(searchQuery) },
-                                colors = ButtonDefaults.buttonColors(containerColor = AdminIndigo),
+                                onClick = onTriggerSearch,
+                                colors = ButtonDefaults.buttonColors(containerColor = WolfGold),
                                 shape = RoundedCornerShape(12.dp),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                                 modifier = Modifier.padding(end = 6.dp)
                             ) {
-                                Text("ئىزدەش", color = Color.White, fontWeight = FontWeight.Bold)
+                                Text(tr(lang, "ئىزدەش", "بحث"), color = WolfBlack, fontWeight = FontWeight.ExtraBold)
                             }
                         },
                         singleLine = true,
@@ -1055,796 +1058,804 @@ fun AdminHomeTabContent(
             }
         }
 
-        // سىنبەلگىلىك باش تاختا كارتىلىرى (چەكسە ئىچىدىكى مەزمۇنى ئېچىلىدۇ)
+        // سىنبەلگىلىك 2 ئاساسىي ھېسابات تىزىملىك كارتىسى: VIP ئەزالار ۋە ھېسابات ئاچقانلار
         item {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                DashboardIconTile(
-                    title = "جەمئىي ھېساباتلار",
-                    count = "$totalCount",
-                    icon = Icons.Filled.Group,
-                    accent = AdminIndigo,
-                    modifier = Modifier.weight(1f),
-                    onClick = { onQuickNavigate(AdminNavTab.ACCOUNTS) }
-                )
-                DashboardIconTile(
-                    title = "ھەق تاپشۇرغانلار",
-                    count = "$paidCount",
-                    icon = Icons.Filled.CheckCircle,
-                    accent = AdminEmerald,
-                    modifier = Modifier.weight(1f),
-                    onClick = { onOpenSearchPage("PAID") }
-                )
-            }
-        }
-
-        item {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                DashboardIconTile(
-                    title = "قەرزگە ئاچقۇزغانلار",
-                    count = "$debtCount",
-                    icon = Icons.Filled.WarningAmber,
-                    accent = AdminRose,
-                    modifier = Modifier.weight(1f),
-                    onClick = { onOpenSearchPage("UNPAID") }
-                )
-                DashboardIconTile(
-                    title = "VIP ھېساباتلار",
-                    count = "$vipCount",
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                HomeSymbolCard(
+                    title = tr(lang, "VIP ئەزالار", "أعضاء VIP"),
+                    subtitle = tr(lang, "چېكىپ تىزىملىكنى كۆرۈش", "اضغط لعرض القائمة"),
+                    count = vipCount,
                     icon = Icons.Filled.WorkspacePremium,
-                    accent = AdminAmber,
+                    accent = WolfGold,
+                    cardColor = cardColor,
+                    textColor = textColor,
                     modifier = Modifier.weight(1f),
-                    onClick = { onQuickNavigate(AdminNavTab.VIP) }
+                    onClick = onOpenVipMembers
+                )
+                HomeSymbolCard(
+                    title = tr(lang, "ھېسابات ئاچقانلار", "الحسابات المفتوحة"),
+                    subtitle = tr(lang, "چېكىپ تىزىملىكنى كۆرۈش", "اضغط لعرض القائمة"),
+                    count = totalOpenedCount,
+                    icon = Icons.Filled.VerifiedUser,
+                    accent = AdminTurquoise,
+                    cardColor = cardColor,
+                    textColor = textColor,
+                    modifier = Modifier.weight(1f),
+                    onClick = onOpenAllAccounts
                 )
             }
         }
 
-        if (pendingCount > 0) {
-            item {
-                Surface(
-                    shape = RoundedCornerShape(18.dp),
-                    color = AdminRose.copy(alpha = 0.16f),
-                    border = BorderStroke(1.5.dp, AdminRose),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onQuickNavigate(AdminNavTab.APPROVALS) }
-                ) {
-                    Row(
-                        modifier = Modifier.padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Icon(Icons.Filled.NotificationsActive, contentDescription = null, tint = AdminRose, modifier = Modifier.size(28.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "يېڭى تىزىملىتىش ئۇچۇرى بار! ($pendingCount دانە)",
-                                fontWeight = FontWeight.ExtraBold,
-                                color = Color.White
-                            )
-                            Text(
-                                text = "خېرىدارلار ئەپكە كىرمەكچى — چېكىپ دەلىللەش كودى ئەۋەتىپ بېرىڭ",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color.LightGray
-                            )
-                        }
-                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, tint = AdminRose)
-                    }
-                }
+        // تېز باشقۇرۇش كارتىلىرى (ھېسابات ئېچىپ بېرىش ۋە يېڭى نەشر يوللاش)
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                HomeSymbolCard(
+                    title = tr(lang, "يېڭى ھېسابات ئېچىپ بېرىش", "فتح حساب جديد"),
+                    subtitle = tr(lang, "Gmail / ئىسىم / ھېسابات", "Gmail / الاسم / المعرف"),
+                    count = null,
+                    icon = Icons.Filled.PersonAdd,
+                    accent = AdminEmerald,
+                    cardColor = cardColor,
+                    textColor = textColor,
+                    modifier = Modifier.weight(1f),
+                    onClick = { onNavigateTab(AdminTab.OPEN_ACCOUNT) }
+                )
+                HomeSymbolCard(
+                    title = tr(lang, "ئەپ يېڭى نەشرىنى يوللاش", "إرسال تحديث التطبيق"),
+                    subtitle = tr(lang, "بارلىق ھېسابات ئەپلىرىگە", "إلى جميع تطبيقات الحسابات"),
+                    count = null,
+                    icon = Icons.Filled.SystemUpdate,
+                    accent = AdminIndigo,
+                    cardColor = cardColor,
+                    textColor = textColor,
+                    modifier = Modifier.weight(1f),
+                    onClick = { onNavigateTab(AdminTab.UPDATE_PUSH) }
+                )
             }
         }
     }
 }
 
 @Composable
-fun DashboardIconTile(
+fun HomeSymbolCard(
     title: String,
-    count: String,
+    subtitle: String,
+    count: Int?,
     icon: ImageVector,
     accent: Color,
+    cardColor: Color,
+    textColor: Color,
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     Surface(
         modifier = modifier.clickable { onClick() },
-        shape = RoundedCornerShape(22.dp),
-        color = AdminCardSurface,
-        border = BorderStroke(1.2.dp, accent.copy(alpha = 0.45f))
+        shape = RoundedCornerShape(24.dp),
+        color = cardColor,
+        border = BorderStroke(1.5.dp, accent.copy(alpha = 0.6f))
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(vertical = 22.dp, horizontal = 14.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Box(
                 modifier = Modifier
-                    .size(48.dp)
-                    .clip(RoundedCornerShape(15.dp))
+                    .size(60.dp)
+                    .clip(RoundedCornerShape(18.dp))
                     .background(accent.copy(alpha = 0.2f)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(icon, contentDescription = title, tint = accent, modifier = Modifier.size(26.dp))
+                Icon(icon, contentDescription = title, tint = accent, modifier = Modifier.size(34.dp))
             }
-            Text(count, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold, color = accent)
-            Text(title, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
-        }
-    }
-}
-
-@Composable
-fun AdminApprovalsAndCodesTab(
-    accounts: List<ClientAccountRecord>,
-    vault: AdminVaultStorage,
-    onApproveAndGenerateCode: (ClientAccountRecord, Boolean) -> Unit,
-    onPreCreateUserWithCode: (String, String, String, String, String, Boolean) -> Unit,
-    onSendCodeByEmail: (ClientAccountRecord) -> Unit,
-    onCopyCode: (String) -> Unit
-) {
-    var fullName by remember { mutableStateOf("") }
-    var username by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var street by remember { mutableStateOf("") }
-    var house by remember { mutableStateOf("") }
-    var isVipNew by remember { mutableStateOf(false) }
-
-    val previewCode = remember(username, isVipNew) {
-        vault.generateVerificationCode(username, isVipNew)
-    }
-
-    LazyColumn(
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = PaddingValues(bottom = 84.dp)
-    ) {
-        // 1. خېرىدارغا ئىشلەتكۈچى ئىسمى ۋە دەلىللەش كودى ياساپ بېرىش رامكىسى
-        item {
-            Surface(
-                shape = RoundedCornerShape(22.dp),
-                color = AdminCardSurface,
-                border = BorderStroke(1.2.dp, AdminTurquoise.copy(alpha = 0.45f))
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Icon(Icons.Filled.Key, contentDescription = null, tint = AdminTurquoise)
-                        Text(
-                            text = "خېرىدارغا ھېسابات ئىسمى ۋە دەلىللەش كودى بېرىش",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.ExtraBold
-                        )
-                    }
-                    Text(
-                        text = "خېرىدارغا ئىشلەتكۈچى ئىسمى بېكىتىپ بەرسىڭىز ياكى خېرىدار ئۆزى تىزىملاتقان ئىسىمنى يازسىڭىز، شۇ كىشىنىڭ ئەپكە كىرىش دەلىللەش كودى چىقىدۇ:",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.LightGray
-                    )
-
-                    OutlinedTextField(
-                        value = username,
-                        onValueChange = { username = it },
-                        label = { Text("ھېسابات ئىسمى ياكى ئېلخەت (مەسىلەن: alim01) *") },
-                        leadingIcon = { Icon(Icons.Filled.Badge, contentDescription = null, tint = AdminTurquoise) },
-                        singleLine = true,
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = fullName,
-                            onValueChange = { fullName = it },
-                            label = { Text("خېرىدارنىڭ تولۇق ئىسمى") },
-                            singleLine = true,
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.weight(1f)
-                        )
-                        OutlinedTextField(
-                            value = password,
-                            onValueChange = { password = it },
-                            label = { Text("مەخپىي نومۇرى") },
-                            singleLine = true,
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = street,
-                            onValueChange = { street = it },
-                            label = { Text("كوچا ئىسمى / ئادرېس") },
-                            singleLine = true,
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.weight(1f)
-                        )
-                        OutlinedTextField(
-                            value = house,
-                            onValueChange = { house = it },
-                            label = { Text("ئۆي نومۇرى") },
-                            singleLine = true,
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                        Text("VIP ھوقۇقى بېرىش (كودسىز كىرەلەيدۇ):", style = MaterialTheme.typography.bodySmall)
-                        Switch(checked = isVipNew, onCheckedChange = { isVipNew = it })
-                    }
-
-                    if (previewCode.isNotBlank()) {
-                        Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            color = AdminEmerald.copy(alpha = 0.16f),
-                            border = BorderStroke(1.dp, AdminEmerald),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Column {
-                                    Text("مەخسۇس دەلىللەش كودى:", style = MaterialTheme.typography.labelSmall)
-                                    Text(previewCode, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold, color = AdminEmerald)
-                                }
-                                Button(
-                                    onClick = { onCopyCode(previewCode) },
-                                    colors = ButtonDefaults.buttonColors(containerColor = AdminEmerald)
-                                ) {
-                                    Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("كۆچۈرۈش", color = Color.White)
-                                }
-                            }
-                        }
-                    }
-
-                    Button(
-                        onClick = {
-                            if (username.isNotBlank()) {
-                                onPreCreateUserWithCode(fullName, username, password, street, house, isVipNew)
-                                fullName = ""
-                                username = ""
-                                password = ""
-                                street = ""
-                                house = ""
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = AdminIndigo),
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Filled.AddTask, contentDescription = null, tint = Color.White)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("ھېساباتنى تىزىملاپ كودنى ساقلاش", color = Color.White, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-        }
-
-        // 2. تىزىملاپ كىرمەكچى بولغان ھېساباتلار تىزىملىكى
-        item {
-            Text(
-                text = "تىزىملاپ كىرمەكچى بولغانلار ۋە دەلىللەش كودلىرى (${accounts.size}):",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.ExtraBold
-            )
-        }
-
-        items(accounts, key = { it.id }) { acc ->
-            val code = acc.licenseCode.ifBlank { vault.generateVerificationCode(acc.username, acc.isVip) }
-            Surface(
-                shape = RoundedCornerShape(18.dp),
-                color = AdminCardSurface,
-                border = BorderStroke(
-                    1.2.dp,
-                    if (acc.status == "PENDING") AdminRose else if (acc.isVip) AdminAmber else AdminTurquoise.copy(alpha = 0.4f)
-                )
-            ) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = if (acc.status == "PENDING") "🔔 «${acc.fullName}» ھېسابات تىزىملاپ كىرمەكچى!" else acc.fullName,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = if (acc.status == "PENDING") AdminRose else Color.White
-                            )
-                            Text(
-                                text = "ھېسابات ئىسمى: ${acc.username} | مەخپىي نومۇرى: ${acc.password}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = AdminTurquoise
-                            )
-                            if (acc.streetName.isNotBlank() || acc.houseNumber.isNotBlank()) {
-                                Text(
-                                    text = "ئادرېسى: ${acc.streetName} ${acc.houseNumber}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color.LightGray
-                                )
-                            }
-                        }
-
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (acc.status == "PENDING") AdminRose else if (acc.isVip) AdminAmber else AdminEmerald
-                        ) {
-                            Text(
-                                text = if (acc.status == "PENDING") "كۈتۈۋاتىدۇ" else if (acc.isVip) "VIP" else "تەستىقلانغان",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
-                        }
-                    }
-
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = Color.White.copy(alpha = 0.06f),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("دەلىللەش كودى: $code", fontWeight = FontWeight.ExtraBold, color = AdminEmerald)
-                            Row {
-                                IconButton(onClick = { onCopyCode(code) }, modifier = Modifier.size(32.dp)) {
-                                    Icon(Icons.Filled.ContentCopy, contentDescription = "كۆچۈرۈش", tint = AdminTurquoise, modifier = Modifier.size(18.dp))
-                                }
-                                IconButton(onClick = { onSendCodeByEmail(acc) }, modifier = Modifier.size(32.dp)) {
-                                    Icon(Icons.Filled.Email, contentDescription = "ئېلخەت ئەۋەتىش", tint = AdminAmber, modifier = Modifier.size(18.dp))
-                                }
-                            }
-                        }
-                    }
-
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = { onApproveAndGenerateCode(acc, true) }) {
-                            Text("VIP ئېچىپ بېرىش", color = AdminAmber, fontWeight = FontWeight.Bold)
-                        }
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Button(
-                            onClick = { onApproveAndGenerateCode(acc, false) },
-                            colors = ButtonDefaults.buttonColors(containerColor = AdminEmerald),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("تەستىقلاپ كود ئەۋەتىش", color = Color.White, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun AdminAllAccountsTab(
-    accounts: List<ClientAccountRecord>,
-    onSearchClick: () -> Unit,
-    onToggleMonth: (ClientAccountRecord, Int) -> Unit,
-    onEdit: (ClientAccountRecord) -> Unit,
-    onDelete: (ClientAccountRecord) -> Unit,
-    onCopy: (String, String) -> Unit
-) {
-    LazyColumn(
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = PaddingValues(bottom = 84.dp)
-    ) {
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            if (count != null) {
                 Text(
-                    text = "بارلىق خېرىدار ھېساباتلىرى (${accounts.size})",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.ExtraBold
+                    text = "$count",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = accent
                 )
-                OutlinedButton(
-                    onClick = onSearchClick,
-                    shape = RoundedCornerShape(12.dp),
-                    border = BorderStroke(1.dp, AdminTurquoise)
-                ) {
-                    Icon(Icons.Filled.Search, contentDescription = null, tint = AdminTurquoise, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("تەپسىلىي ئىزدەش", color = AdminTurquoise)
-                }
             }
-        }
-
-        items(accounts, key = { it.id }) { acc ->
-            AdminClientDetailCard(
-                acc = acc,
-                onToggleMonth = { mIdx -> onToggleMonth(acc, mIdx) },
-                onEdit = { onEdit(acc) },
-                onDelete = { onDelete(acc) },
-                onCopy = onCopy
-            )
-        }
-    }
-}
-
-@Composable
-fun AdminClientDetailCard(
-    acc: ClientAccountRecord,
-    onToggleMonth: (Int) -> Unit,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
-    onCopy: (String, String) -> Unit
-) {
-    var showPassword by remember { mutableStateOf(false) }
-
-    Surface(
-        shape = RoundedCornerShape(22.dp),
-        color = AdminCardSurface,
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.16f)),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.weight(1f)) {
-                    Box(
-                        modifier = Modifier
-                            .size(42.dp)
-                            .clip(CircleShape)
-                            .background(Brush.linearGradient(listOf(AdminIndigo, AdminTurquoise))),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(Icons.Filled.Person, contentDescription = null, tint = Color.White)
-                    }
-                    Column {
-                        Text(acc.fullName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold)
-                        Text(
-                            text = "تىزىملاتقان ۋاقتى: ${acc.openDate.ifBlank { "بەلگىلەنمىگەن" }}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color.LightGray
-                        )
-                    }
-                }
-
-                Row {
-                    IconButton(onClick = onEdit) {
-                        Icon(Icons.Filled.Edit, contentDescription = "تەھرىرلەش", tint = AdminTurquoise)
-                    }
-                    IconButton(onClick = onDelete) {
-                        Icon(Icons.Filled.Delete, contentDescription = "ئۆچۈرۈش", tint = AdminRose)
-                    }
-                }
-            }
-
-            // ھېسابات ئىسمى، مەخپىي نومۇرى، كوچا ۋە ئۆي نومۇرى
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = Color.White.copy(alpha = 0.05f),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Text("ھېسابات ئىسمى: ${acc.username}", fontWeight = FontWeight.Bold, color = AdminTurquoise)
-                        IconButton(onClick = { onCopy("ھېسابات ئىسمى", acc.username) }, modifier = Modifier.size(28.dp)) {
-                            Icon(Icons.Filled.ContentCopy, contentDescription = null, tint = AdminTurquoise, modifier = Modifier.size(16.dp))
-                        }
-                    }
-
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = "مەخپىي نومۇرى: ${if (showPassword) acc.password else "••••••••"}",
-                            fontWeight = FontWeight.Bold,
-                            color = AdminAmber
-                        )
-                        Row {
-                            IconButton(onClick = { showPassword = !showPassword }, modifier = Modifier.size(28.dp)) {
-                                Icon(if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, contentDescription = null, modifier = Modifier.size(16.dp))
-                            }
-                            IconButton(onClick = { onCopy("مەخپىي نومۇر", acc.password) }, modifier = Modifier.size(28.dp)) {
-                                Icon(Icons.Filled.ContentCopy, contentDescription = null, tint = AdminAmber, modifier = Modifier.size(16.dp))
-                            }
-                        }
-                    }
-
-                    Text("ئادرېسى: ${acc.streetName} ${acc.houseNumber} | ئېقىمى: ${acc.flowAmount}", style = MaterialTheme.typography.bodySmall)
-                    Text("دەلىللەش كودى: ${acc.licenseCode}", style = MaterialTheme.typography.labelSmall, color = AdminEmerald)
-                }
-            }
-
-            // 12 ئايلىق پۇل تۆلەش ئەھۋالى
             Text(
-                text = "پۇل تۆلىگەن ئايلار (${acc.paidCount()} / 12):",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.ExtraBold,
+                color = textColor,
+                textAlign = TextAlign.Center
             )
-
-            val rows = (0 until 12).chunked(4)
-            rows.forEach { rIndices ->
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    rIndices.forEach { mIdx ->
-                        val paid = acc.paidMonths.getOrElse(mIdx) { false }
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = if (paid) AdminEmerald.copy(alpha = 0.22f) else AdminRose.copy(alpha = 0.14f),
-                            border = BorderStroke(1.dp, if (paid) AdminEmerald else AdminRose.copy(alpha = 0.5f)),
-                            modifier = Modifier
-                                .weight(1f)
-                                .clickable { onToggleMonth(mIdx) }
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(vertical = 6.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Text("${mIdx + 1}-ئاي", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-                                Text(
-                                    text = if (paid) "تۆلەندى" else "تۆلەنمىدى",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (paid) AdminEmerald else AdminRose
-                                )
-                            }
-                        }
-                    }
-                }
-            }
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.labelSmall,
+                color = accent,
+                textAlign = TextAlign.Center
+            )
         }
     }
 }
 
+/**
+ * 2-بۆلۈم: باشقىلارغا ھېسابات ئېچىپ بېرىش مەركىزى
+ * (1. Gmail ئارقىلىق ھېسابات ئېچىپ بېرىش / 2. ئىسىم ئارقىلىق ھېسابات ئېچىپ بېرىش / 3. ھېسابات نامى ئارقىلىق ئېچىپ بېرىش)
+ */
 @Composable
-fun AdminVipManagementTab(
-    accounts: List<ClientAccountRecord>,
-    vault: AdminVaultStorage,
-    onSetVipDuration: (ClientAccountRecord, Int) -> Unit
+fun AdminOpenAccountTab(
+    lang: AdminLanguage,
+    storage: AdminStorageEngine,
+    accounts: List<ManagedUserAccount>,
+    cardColor: Color,
+    textColor: Color,
+    onAccountCreated: (ManagedUserAccount, Boolean) -> Unit
 ) {
-    LazyColumn(
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = PaddingValues(bottom = 84.dp)
-    ) {
-        item {
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = AdminCardSurface,
-                border = BorderStroke(1.2.dp, AdminAmber.copy(alpha = 0.5f))
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Icon(Icons.Filled.WorkspacePremium, contentDescription = null, tint = AdminAmber)
-                        Text("VIP ھوقۇقى ۋە مۇددەت بەلگىلەش مەركىزى", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold)
-                    }
-                    Text(
-                        text = "VIP ئېچىپ بېرىلگەن ھېساباتلار دەلىللەش كودى ئىشلەتمەي تۇرۇپ بىۋاسىتە ئەپكە كىرەلەيدۇ. ھەر بىر كىشىگە VIP مۇددىتى بەلگىلىيەلەيسىز:",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.LightGray
-                    )
-                }
-            }
-        }
+    var selectedMethod by remember { mutableStateOf(AccountOpenMethod.BY_GMAIL) }
+    var gmailInput by remember { mutableStateOf("") }
+    var fullNameInput by remember { mutableStateOf("") }
+    var accountIdInput by remember { mutableStateOf("") }
+    var passwordInput by remember { mutableStateOf("") }
+    var addressInput by remember { mutableStateOf("") }
+    var grantVip by remember { mutableStateOf(false) }
+    var vipDays by remember { mutableIntStateOf(30) }
 
-        items(accounts, key = { it.id }) { acc ->
-            val activeVip = acc.isVipActive()
-            val remDays = acc.vipRemainingDays()
-
-            Surface(
-                shape = RoundedCornerShape(18.dp),
-                color = AdminCardSurface,
-                border = BorderStroke(1.dp, if (activeVip) AdminAmber else Color.White.copy(alpha = 0.15f))
-            ) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Column {
-                            Text(acc.fullName, fontWeight = FontWeight.ExtraBold)
-                            Text("ھېسابات: ${acc.username}", style = MaterialTheme.typography.labelSmall, color = AdminTurquoise)
-                        }
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (activeVip) AdminAmber.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.08f)
-                        ) {
-                            Text(
-                                text = if (activeVip) "VIP ($remDays كۈن قالدى)" else "نورمال ھېسابات",
-                                color = if (activeVip) AdminAmber else Color.LightGray,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
-                        }
-                    }
-
-                    Text("مۇددەت تاللاپ VIP ئېچىش:", style = MaterialTheme.typography.labelSmall, color = Color.LightGray)
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        listOf(
-                            7 to "7 كۈن",
-                            30 to "1 ئاي",
-                            90 to "3 ئاي",
-                            180 to "6 ئاي",
-                            365 to "1 يىل"
-                        ).forEach { (days, label) ->
-                            FilterChip(
-                                selected = false,
-                                onClick = { onSetVipDuration(acc, days) },
-                                leadingIcon = { Icon(Icons.Filled.Star, contentDescription = null, tint = AdminAmber, modifier = Modifier.size(15.dp)) },
-                                label = { Text(label) }
-                            )
-                        }
-
-                        if (activeVip) {
-                            FilterChip(
-                                selected = false,
-                                onClick = { onSetVipDuration(acc, 0) },
-                                leadingIcon = { Icon(Icons.Filled.Close, contentDescription = null, tint = AdminRose, modifier = Modifier.size(15.dp)) },
-                                label = { Text("VIP توختىتىش", color = AdminRose) }
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun AdminVaultAndCommunicationTab(
-    vault: AdminVaultStorage,
-    reminders: List<BroadcastReminder>,
-    feedbacks: List<ClientFeedbackMessage>,
-    onSendReminder: (String, String, String) -> Unit,
-    onReplyFeedback: (ClientFeedbackMessage, String) -> Unit,
-    onClearAllVault: () -> Unit,
-    onReloadAccounts: () -> Unit,
-    onShowMessage: (String) -> Unit
-) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-
-    var remTitle by remember { mutableStateOf("") }
-    var remContent by remember { mutableStateOf("") }
-    var remTarget by remember { mutableStateOf("ALL") }
-
-    var cloudUrl by remember { mutableStateOf(vault.getCloudSyncUrl()) }
-    var newAdminPwd by remember { mutableStateOf("") }
-    var confirmClearDialog by remember { mutableStateOf(false) }
-
-    val exportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/json")
-    ) { uri ->
-        if (uri != null) {
-            runCatching {
-                context.contentResolver.openOutputStream(uri)?.use { out ->
-                    out.write(vault.buildFullBackupJson().toByteArray(Charsets.UTF_8))
-                }
-                onShowMessage("بارلىق مەلۇماتلار JSON ھۆججىتىگە چىقىرىلدى!")
-            }
-        }
+    val primaryIdentifier = when (selectedMethod) {
+        AccountOpenMethod.BY_GMAIL -> gmailInput.trim()
+        AccountOpenMethod.BY_NAME -> fullNameInput.trim()
+        AccountOpenMethod.BY_ACCOUNT_ID -> accountIdInput.trim()
     }
 
-    val importLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri != null) {
-            runCatching {
-                val text = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } ?: ""
-                vault.importFullBackupJson(text).onSuccess { count ->
-                    onReloadAccounts()
-                    onShowMessage("$count دانە ھېسابات مەلۇماتى ئەسلىگە كەلتۈرۈلدى!")
-                }
-            }
-        }
+    val liveGeneratedCode = remember(primaryIdentifier, grantVip) {
+        storage.generateVerificationCode(primaryIdentifier, grantVip)
     }
 
     LazyColumn(
         verticalArrangement = Arrangement.spacedBy(14.dp),
         contentPadding = PaddingValues(bottom = 84.dp)
     ) {
-        // 1. خېرىدارلارغا ئەسلەتمە يوللاش
         item {
             Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = AdminCardSurface,
-                border = BorderStroke(1.dp, AdminIndigo.copy(alpha = 0.5f))
+                shape = RoundedCornerShape(24.dp),
+                color = cardColor,
+                border = BorderStroke(1.5.dp, WolfGold.copy(alpha = 0.55f))
             ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Icon(Icons.Filled.Campaign, contentDescription = null, tint = AdminTurquoise)
-                        Text("خېرىدارلارغا ئەسلەتمە يوللاش", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold)
+                Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = tr(lang, "باشقىلارغا ھېسابات ئېچىپ بېرىش تىزىملىكى", "قائمة فتح حساب للآخرين"),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = textColor
+                    )
+
+                    // 3 خىل ئېنىق ھېسابات ئېچىش ئۇسۇلى
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        AccountOpenMethod.entries.forEach { method ->
+                            val isSelected = selectedMethod == method
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = if (isSelected) WolfGold.copy(alpha = 0.22f) else Color.Transparent,
+                                border = BorderStroke(1.2.dp, if (isSelected) WolfGold else Color.Gray.copy(alpha = 0.35f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { selectedMethod = method }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Icon(method.icon, contentDescription = null, tint = if (isSelected) WolfGold else AdminTurquoise)
+                                    Text(
+                                        text = tr(lang, method.ugLabel, method.arLabel),
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = textColor,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    if (isSelected) {
+                                        Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = WolfGold)
+                                    }
+                                }
+                            }
+                        }
                     }
+
+                    HorizontalDivider(color = WolfGold.copy(alpha = 0.25f))
+
+                    when (selectedMethod) {
+                        AccountOpenMethod.BY_GMAIL -> {
+                            OutlinedTextField(
+                                value = gmailInput,
+                                onValueChange = { gmailInput = it },
+                                label = { Text(tr(lang, "خېرىدارنىڭ Gmail ئادرېسى *", "عنوان Gmail للعميل *")) },
+                                placeholder = { Text("user@gmail.com") },
+                                leadingIcon = { Icon(Icons.Filled.Email, contentDescription = null, tint = WolfGold) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            OutlinedTextField(
+                                value = fullNameInput,
+                                onValueChange = { fullNameInput = it },
+                                label = { Text(tr(lang, "خېرىدارنىڭ ئىسمى (ئىختىيارىي)", "اسم العميل (اختياري)")) },
+                                leadingIcon = { Icon(Icons.Filled.Person, contentDescription = null, tint = AdminTurquoise) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+
+                        AccountOpenMethod.BY_NAME -> {
+                            OutlinedTextField(
+                                value = fullNameInput,
+                                onValueChange = { fullNameInput = it },
+                                label = { Text(tr(lang, "خېرىدارنىڭ تولۇق ئىسمى *", "الاسم الكامل للعميل *")) },
+                                leadingIcon = { Icon(Icons.Filled.Person, contentDescription = null, tint = WolfGold) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            OutlinedTextField(
+                                value = gmailInput,
+                                onValueChange = { gmailInput = it },
+                                label = { Text(tr(lang, "ئالاقىلىشىش Gmail ئادرېسى", "عنوان Gmail للتواصل")) },
+                                leadingIcon = { Icon(Icons.Filled.Email, contentDescription = null, tint = AdminTurquoise) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+
+                        AccountOpenMethod.BY_ACCOUNT_ID -> {
+                            OutlinedTextField(
+                                value = accountIdInput,
+                                onValueChange = { accountIdInput = it },
+                                label = { Text(tr(lang, "مەخسۇس ھېسابات نامى (ID) *", "اسم/معرف الحساب *")) },
+                                leadingIcon = { Icon(Icons.Filled.Badge, contentDescription = null, tint = WolfGold) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            OutlinedTextField(
+                                value = fullNameInput,
+                                onValueChange = { fullNameInput = it },
+                                label = { Text(tr(lang, "خېرىدارنىڭ ئىسمى", "اسم العميل")) },
+                                leadingIcon = { Icon(Icons.Filled.Person, contentDescription = null, tint = AdminTurquoise) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            OutlinedTextField(
+                                value = gmailInput,
+                                onValueChange = { gmailInput = it },
+                                label = { Text(tr(lang, "خېرىدارنىڭ Gmail ئادرېسى", "عنوان Gmail للعميل")) },
+                                leadingIcon = { Icon(Icons.Filled.Email, contentDescription = null, tint = AdminEmerald) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+
                     OutlinedTextField(
-                        value = remTitle,
-                        onValueChange = { remTitle = it },
-                        label = { Text("ئەسلەتمە ماۋزۇسى") },
+                        value = passwordInput,
+                        onValueChange = { passwordInput = it },
+                        label = { Text(tr(lang, "ھېسابات مەخپىي نومۇرى *", "كلمة مرور الحساب *")) },
+                        leadingIcon = { Icon(Icons.Filled.Key, contentDescription = null, tint = AdminEmerald) },
                         singleLine = true,
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
+
                     OutlinedTextField(
-                        value = remContent,
-                        onValueChange = { remContent = it },
-                        label = { Text("ئەسلەتمە مەزمۇنى...") },
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = remTarget,
-                        onValueChange = { remTarget = it },
-                        label = { Text("قوبۇل قىلغۇچى (ALL = ھەممەيلەن ياكى ھېسابات ئىسمى)") },
+                        value = addressInput,
+                        onValueChange = { addressInput = it },
+                        label = { Text(tr(lang, "ئورنى / ئادرېسى", "الموقع / العنوان")) },
+                        leadingIcon = { Icon(Icons.Filled.LocationOn, contentDescription = null, tint = AdminRose) },
                         singleLine = true,
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = tr(lang, "VIP ھوقۇقى بىلەن ئېچىش (كودسىز بىۋاسىتە كىرىدۇ)", "فتح كعضو VIP (دخول مباشر بدون رمز)"),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold,
+                            color = textColor
+                        )
+                        Switch(checked = grantVip, onCheckedChange = { grantVip = it })
+                    }
+
+                    if (liveGeneratedCode.isNotBlank()) {
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = AdminEmerald.copy(alpha = 0.15f),
+                            border = BorderStroke(1.2.dp, AdminEmerald),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = tr(lang, "بۇ ھېساباتنىڭ مەخسۇس دەلىللەش كودى:", "رمز التفعيل الخاص بهذا الحساب:"),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = textColor
+                                )
+                                Text(
+                                    text = liveGeneratedCode,
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = AdminEmerald
+                                )
+                            }
+                        }
+                    }
+
+                    val createRecord: (Boolean) -> Unit = { sendMail ->
+                        if (primaryIdentifier.isNotBlank()) {
+                            val today = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date())
+                            val finalUsername = when (selectedMethod) {
+                                AccountOpenMethod.BY_GMAIL -> gmailInput.trim()
+                                AccountOpenMethod.BY_NAME -> fullNameInput.trim()
+                                AccountOpenMethod.BY_ACCOUNT_ID -> accountIdInput.trim()
+                            }
+                            val finalGmail = if (gmailInput.contains("@")) gmailInput.trim() else "$finalUsername@gmail.com"
+                            val newAcc = ManagedUserAccount(
+                                id = UUID.randomUUID().toString(),
+                                openMethod = selectedMethod.name,
+                                fullName = fullNameInput.trim().ifBlank { finalUsername },
+                                username = finalUsername,
+                                gmail = finalGmail,
+                                password = passwordInput.trim().ifBlank { "123456" },
+                                address = addressInput.trim(),
+                                licenseCode = liveGeneratedCode,
+                                isVip = grantVip,
+                                vipExpireEpochMillis = if (grantVip) System.currentTimeMillis() + vipDays.toLong() * 24L * 3600L * 1000L else 0L,
+                                status = if (grantVip) "VIP" else "ACTIVE",
+                                createdAt = today
+                            )
+                            onAccountCreated(newAcc, sendMail)
+                            gmailInput = ""
+                            fullNameInput = ""
+                            accountIdInput = ""
+                            passwordInput = ""
+                            addressInput = ""
+                        }
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                        Button(
+                            onClick = { createRecord(false) },
+                            colors = ButtonDefaults.buttonColors(containerColor = AdminEmerald),
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Filled.Check, contentDescription = null, tint = Color.White)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(tr(lang, "ھېسابات ئېچىش", "فتح الحساب"), color = Color.White, fontWeight = FontWeight.Bold)
+                        }
+
+                        Button(
+                            onClick = { createRecord(true) },
+                            colors = ButtonDefaults.buttonColors(containerColor = WolfGold),
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, tint = WolfBlack)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(tr(lang, "ئېچىپ Gmail غا يوللاش", "فتح وإرسال لـ Gmail"), color = WolfBlack, fontWeight = FontWeight.ExtraBold)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 3-بۆلۈم: VIP ئەزالار ۋە مۇددەت بەلگىلەش مەركىزى
+ */
+@Composable
+fun AdminVipDurationTab(
+    lang: AdminLanguage,
+    accounts: List<ManagedUserAccount>,
+    storage: AdminStorageEngine,
+    cardColor: Color,
+    textColor: Color,
+    onUpdateVip: (ManagedUserAccount, Int) -> Unit
+) {
+    LazyColumn(
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(bottom = 84.dp)
+    ) {
+        item {
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = cardColor,
+                border = BorderStroke(1.2.dp, WolfGold)
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Filled.WorkspacePremium, contentDescription = null, tint = WolfGold)
+                        Text(
+                            text = tr(lang, "VIP ئەزالار ۋە مۇددەت باشقۇرۇش", "إدارة أعضاء VIP والمدة"),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = textColor
+                        )
+                    }
+                    Text(
+                        text = tr(
+                            lang,
+                            "VIP ئېچىپ بېرىلگەن ھېساباتلار دەلىللەش كودى ئىشلەتمەي بىۋاسىتە ئەپكە كىرەلەيدۇ:",
+                            "الحسابات التي تملك صلاحية VIP يمكنها الدخول مباشرة دون رمز تفعيل:"
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = textColor.copy(alpha = 0.75f)
+                    )
+                }
+            }
+        }
+
+        if (accounts.isEmpty()) {
+            item {
+                Surface(shape = RoundedCornerShape(20.dp), color = cardColor, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = tr(lang, "ھازىرچە ئېچىلغان ھېسابات يوق. «ھېسابات ئېچىش» بۆلۈمىدىن قوشۇڭ.", "لا توجد حسابات حالياً. أضف حساباً من قسم فتح حساب."),
+                        modifier = Modifier.padding(28.dp),
+                        textAlign = TextAlign.Center,
+                        color = textColor
+                    )
+                }
+            }
+        } else {
+            items(accounts, key = { it.id }) { acc ->
+                val isVip = acc.isVipActive()
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = cardColor,
+                    border = BorderStroke(1.2.dp, if (isVip) WolfGold else Color.Gray.copy(alpha = 0.3f))
+                ) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Column {
+                                Text(acc.fullName, fontWeight = FontWeight.ExtraBold, color = textColor)
+                                Text(acc.gmail, style = MaterialTheme.typography.labelSmall, color = AdminTurquoise)
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isVip) WolfGold else Color.Gray.copy(alpha = 0.2f)
+                            ) {
+                                Text(
+                                    text = if (isVip) "VIP (${acc.vipRemainingDays()} ${tr(lang, "كۈن", "يوم")})" else tr(lang, "ئادەتتىكى", "عادي"),
+                                    color = if (isVip) WolfBlack else textColor,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            listOf(
+                                7 to tr(lang, "7 كۈن", "7 أيام"),
+                                30 to tr(lang, "1 ئاي", "شهر واحد"),
+                                90 to tr(lang, "3 ئاي", "3 أشهر"),
+                                180 to tr(lang, "6 ئاي", "6 أشهر"),
+                                365 to tr(lang, "1 يىل", "سنة واحدة")
+                            ).forEach { (days, label) ->
+                                FilterChip(
+                                    selected = false,
+                                    onClick = { onUpdateVip(acc, days) },
+                                    leadingIcon = { Icon(Icons.Filled.Star, contentDescription = null, tint = WolfGold, modifier = Modifier.size(15.dp)) },
+                                    label = { Text(label) }
+                                )
+                            }
+                            if (isVip) {
+                                FilterChip(
+                                    selected = false,
+                                    onClick = { onUpdateVip(acc, 0) },
+                                    label = { Text(tr(lang, "VIP توختىتىش", "إلغاء VIP"), color = AdminRose) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 4-بۆلۈم: ئەپنىڭ يېڭى نەشرىنى ھەر بىر ھېسابات ئەپىگە يوللاش مەركىزى
+ */
+@Composable
+fun AdminVersionPushTab(
+    lang: AdminLanguage,
+    accounts: List<ManagedUserAccount>,
+    latestRelease: AppVersionRelease,
+    cardColor: Color,
+    textColor: Color,
+    onPublishUpdate: (AppVersionRelease) -> Unit
+) {
+    var versionName by remember { mutableStateOf(latestRelease.versionName) }
+    var apkUrl by remember { mutableStateOf(latestRelease.apkDownloadUrl) }
+    var notes by remember { mutableStateOf(latestRelease.releaseNotes) }
+    var forceUpdate by remember { mutableStateOf(latestRelease.forceUpdate) }
+    var targetAccount by remember { mutableStateOf(latestRelease.targetAccount) }
+
+    LazyColumn(
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = PaddingValues(bottom = 84.dp)
+    ) {
+        item {
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = cardColor,
+                border = BorderStroke(1.5.dp, AdminIndigo.copy(alpha = 0.6f))
+            ) {
+                Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Filled.SystemUpdate, contentDescription = null, tint = WolfGold, modifier = Modifier.size(28.dp))
+                        Text(
+                            text = tr(lang, "ئەپنىڭ يېڭى نەشرىنى ھېسابات ئەپلىرىگە يوللاش", "إرسال الإصدار الجديد لتطبيقات الحسابات"),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = textColor
+                        )
+                    }
+
+                    OutlinedTextField(
+                        value = versionName,
+                        onValueChange = { versionName = it },
+                        label = { Text(tr(lang, "يېڭى نەشر نومۇرى (مەسىلەن: 2.0.0) *", "رقم الإصدار الجديد *")) },
+                        leadingIcon = { Icon(Icons.Filled.Verified, contentDescription = null, tint = WolfGold) },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = apkUrl,
+                        onValueChange = { apkUrl = it },
+                        label = { Text(tr(lang, "يېڭى APK چۈشۈرۈش ئادرېسى (URL) *", "رابط تحميل APK الجديد *")) },
+                        placeholder = { Text("https://github.com/.../Hesabat-Client.apk") },
+                        leadingIcon = { Icon(Icons.Filled.Link, contentDescription = null, tint = AdminTurquoise) },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = notes,
+                        onValueChange = { notes = it },
+                        label = { Text(tr(lang, "يېڭى نەشر چۈشەندۈرۈشى", "ملاحظات الإصدار الجديد")) },
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = targetAccount,
+                        onValueChange = { targetAccount = it },
+                        label = { Text(tr(lang, "يوللىنىدىغان ھېسابات (ALL = بارلىق ھېساباتلار)", "الحساب المستهدف (ALL = الجميع)")) },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = tr(lang, "مەجبۇرىي يېڭىلاش (يېڭىلىمىسا ئەپ ئېچىلمايدۇ)", "تحديث إجباري لجميع الحسابات"),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold,
+                            color = textColor
+                        )
+                        Switch(checked = forceUpdate, onCheckedChange = { forceUpdate = it })
+                    }
+
                     Button(
                         onClick = {
-                            if (remContent.isNotBlank()) {
-                                onSendReminder(remTitle.ifBlank { "باشقۇرغۇچى ئەسلەتمىسى" }, remContent, remTarget)
-                                remTitle = ""
-                                remContent = ""
-                            }
+                            val now = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date())
+                            onPublishUpdate(
+                                AppVersionRelease(
+                                    versionName = versionName.trim().ifBlank { "2.0.0" },
+                                    apkDownloadUrl = apkUrl.trim(),
+                                    releaseNotes = notes.trim(),
+                                    forceUpdate = forceUpdate,
+                                    targetAccount = targetAccount.trim().ifBlank { "ALL" },
+                                    publishedAt = now
+                                )
+                            )
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = AdminEmerald),
-                        modifier = Modifier.fillMaxWidth()
+                        colors = ButtonDefaults.buttonColors(containerColor = WolfGold),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp)
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, tint = Color.White)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("ئەسلەتمە تارقىتىش", color = Color.White, fontWeight = FontWeight.Bold)
+                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, tint = WolfBlack)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = tr(lang, "ھازىر بارلىق ھېسابات ئەپلىرىگە يوللاش", "إرسال التحديث لجميع الحسابات الآن"),
+                            color = WolfBlack,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 5-بۆلۈم: تەڭشەكلەر (تىل، تەگلىك، كېچە-كۈندۈزلۈك تەڭشەك، ھېسابات ئەپىنى باشقۇرۇش تەڭشەكلىرى)
+ */
+@Composable
+fun AdminComprehensiveSettingsTab(
+    lang: AdminLanguage,
+    isDark: Boolean,
+    storage: AdminStorageEngine,
+    clientConfig: ClientAppControlConfig,
+    cardColor: Color,
+    textColor: Color,
+    onLangChange: (AdminLanguage) -> Unit,
+    onDarkChange: (Boolean) -> Unit,
+    onPickBackground: (Uri) -> Unit,
+    onResetBackground: () -> Unit,
+    onPickLogo: (Uri) -> Unit,
+    onSaveClientConfig: (ClientAppControlConfig) -> Unit,
+    onClearAllAccounts: () -> Unit,
+    onShowNotice: (String) -> Unit
+) {
+    var allowReg by remember { mutableStateOf(clientConfig.allowNewRegistration) }
+    var reqCode by remember { mutableStateOf(clientConfig.requireVerificationCode) }
+    var remoteLock by remember { mutableStateOf(clientConfig.remoteMaintenanceLock) }
+    var bannerText by remember { mutableStateOf(clientConfig.announcementBanner) }
+    var cloudUrl by remember { mutableStateOf(storage.getCloudSyncUrl()) }
+    var newAdminPwd by remember { mutableStateOf("") }
+
+    val bgPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) onPickBackground(uri)
+    }
+    val logoPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) onPickLogo(uri)
+    }
+
+    LazyColumn(
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = PaddingValues(bottom = 84.dp)
+    ) {
+        // 1. تىل ۋە كېچە-كۈندۈزلۈك تەڭشەك
+        item {
+            Surface(shape = RoundedCornerShape(22.dp), color = cardColor, border = BorderStroke(1.dp, WolfGold.copy(alpha = 0.4f))) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = tr(lang, "تىل ۋە كېچە-كۈندۈزلۈك كۆرۈنۈش", "اللغة والوضع الليلي/النهاري"),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = textColor
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                        AdminLanguage.entries.forEach { l ->
+                            FilterChip(
+                                selected = lang == l,
+                                onClick = { onLangChange(l) },
+                                label = { Text(l.title) },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(tr(lang, "كېچىلىك قاراڭغۇ ھالەت (Dark Mode)", "الوضع الليلي الداكن"), color = textColor, fontWeight = FontWeight.Bold)
+                        Switch(checked = isDark, onCheckedChange = onDarkChange)
                     }
                 }
             }
         }
 
-        // 2. خېرىدارلارنىڭ ئىنكاسلىرى ۋە جاۋاب يېزىش
+        // 2. تەگلىك ۋە لوگو رەسىم تەڭشىكى
         item {
-            Text("خېرىدارلاردىن كەلگەن ئىنكاسلار (${feedbacks.size}):", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.ExtraBold)
-        }
-
-        items(feedbacks, key = { it.id }) { item ->
-            var replyInput by remember(item.id) { mutableStateOf(item.adminReply) }
-            Surface(
-                shape = RoundedCornerShape(18.dp),
-                color = AdminCardSurface,
-                border = BorderStroke(1.dp, AdminTurquoise.copy(alpha = 0.35f))
-            ) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("${item.clientName} (${item.clientUsername})", fontWeight = FontWeight.ExtraBold, color = AdminTurquoise)
-                    Text(item.message, style = MaterialTheme.typography.bodyMedium)
-                    OutlinedTextField(
-                        value = replyInput,
-                        onValueChange = { replyInput = it },
-                        label = { Text("باشقۇرغۇچى جاۋابى يېزىش...") },
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
+            Surface(shape = RoundedCornerShape(22.dp), color = cardColor, border = BorderStroke(1.dp, AdminTurquoise.copy(alpha = 0.4f))) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = tr(lang, "تەگلىك ۋە لوگو رەسىم تەڭشىكى", "إعدادات الخلفية والشعار"),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = textColor
                     )
                     Button(
-                        onClick = { onReplyFeedback(item, replyInput) },
+                        onClick = { bgPicker.launch("image/*") },
                         colors = ButtonDefaults.buttonColors(containerColor = AdminIndigo),
-                        modifier = Modifier.align(Alignment.End)
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("جاۋاب قايتۇرۇش", color = Color.White)
+                        Icon(Icons.Filled.Image, contentDescription = null, tint = Color.White)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(tr(lang, "تېلېفوندىن تەگلىك رەسىم تاللاش", "اختيار صورة خلفية من الهاتف"), color = Color.White)
+                    }
+                    OutlinedButton(
+                        onClick = onResetBackground,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(tr(lang, "ئەسلى تەگلىككە قايتۇرۇش", "استعادة الخلفية الأصلية"))
+                    }
+                    Button(
+                        onClick = { logoPicker.launch("image/*") },
+                        colors = ButtonDefaults.buttonColors(containerColor = WolfGold),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.Shield, contentDescription = null, tint = WolfBlack)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(tr(lang, "لوگو رەسىمىنى گالېرېيەدىن تاللاش", "اختيار صورة الشعار من المعرض"), color = WolfBlack, fontWeight = FontWeight.ExtraBold)
                     }
                 }
             }
         }
 
-        // 3. مەخسۇس ساقلاش سۇپىسى، بۇلۇت ئۇلىنىشى ۋە ئەپنى تازىلاش
+        // 3. ھېسابات ئەپىنى باشقۇرۇش تەڭشەكلىرى
         item {
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = AdminCardSurface,
-                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.18f))
-            ) {
+            Surface(shape = RoundedCornerShape(22.dp), color = cardColor, border = BorderStroke(1.2.dp, AdminEmerald.copy(alpha = 0.5f))) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Icon(Icons.Filled.CloudSync, contentDescription = null, tint = AdminEmerald)
-                        Text("مەخسۇس ساقلاش سۇپىسى ۋە تازىلاش", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold)
+                    Text(
+                        text = tr(lang, "ھېسابات ئەپىنى يىراقتىن باشقۇرۇش تەڭشەكلىرى", "إعدادات التحكم بتطبيق الحسابات"),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = textColor
+                    )
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text(tr(lang, "يېڭى ھېسابات تىزىملىتىشقا رۇخسەت", "السماح بتسجيل حسابات جديدة"), color = textColor)
+                        Switch(checked = allowReg, onCheckedChange = { allowReg = it })
                     }
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text(tr(lang, "دەلىللەش كودى مەجبۇرىي بولسۇن", "إلزامية رمز التفعيل"), color = textColor)
+                        Switch(checked = reqCode, onCheckedChange = { reqCode = it })
+                    }
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text(tr(lang, "ھېسابات ئەپىنى يىراقتىن قۇلۇپلاش", "قفل تطبيق الحسابات عن بُعد"), color = AdminRose, fontWeight = FontWeight.Bold)
+                        Switch(checked = remoteLock, onCheckedChange = { remoteLock = it })
+                    }
+
+                    OutlinedTextField(
+                        value = bannerText,
+                        onValueChange = { bannerText = it },
+                        label = { Text(tr(lang, "ھېسابات ئەپى باش بېتىدىكى ئۇقتۇرۇش خېتى", "رسالة الإعلان في تطبيق الحسابات")) },
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
 
                     OutlinedTextField(
                         value = cloudUrl,
                         onValueChange = {
                             cloudUrl = it
-                            vault.setCloudSyncUrl(it)
+                            storage.setCloudSyncUrl(it)
                         },
-                        label = { Text("بۇلۇت ماس قەدەملەش ئادرېسى (Firebase / REST URL)") },
-                        placeholder = { Text("https://your-project.firebaseio.com") },
+                        label = { Text(tr(lang, "بۇلۇت باغلىنىش ئادرېسى (Cloud Sync URL)", "رابط المزامنة السحابية")) },
                         singleLine = true,
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.fillMaxWidth()
@@ -1852,132 +1863,108 @@ fun AdminVaultAndCommunicationTab(
 
                     Button(
                         onClick = {
-                            scope.launch {
-                                val res = vault.syncWithCloudEndpoint()
-                                onShowMessage(res.getOrElse { "يەرلىك ئامباردا ساقلاندى" })
-                            }
+                            onSaveClientConfig(
+                                ClientAppControlConfig(
+                                    allowNewRegistration = allowReg,
+                                    requireVerificationCode = reqCode,
+                                    remoteMaintenanceLock = remoteLock,
+                                    announcementBanner = bannerText
+                                )
+                            )
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = AdminTurquoise),
+                        colors = ButtonDefaults.buttonColors(containerColor = AdminEmerald),
+                        shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(Icons.Filled.Sync, contentDescription = null, tint = Color.White)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("بۇلۇت ۋە خېرىدار ئەپى بىلەن ماس قەدەملەش", color = Color.White, fontWeight = FontWeight.Bold)
+                        Text(tr(lang, "ھېسابات ئەپى تەڭشەكلىرىنى ساقلاش ۋە يوللاش", "حفظ وإرسال إعدادات تطبيق الحسابات"), color = Color.White, fontWeight = FontWeight.Bold)
                     }
+                }
+            }
+        }
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        OutlinedButton(
-                            onClick = { exportLauncher.launch("hesabat_admin_backup.json") },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Filled.Download, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("زاپاس چىقىرىش")
-                        }
-                        OutlinedButton(
-                            onClick = { importLauncher.launch(arrayOf("application/json", "*/*")) },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Filled.Upload, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("زاپاس ئەكىرىش")
-                        }
-                    }
-
-                    HorizontalDivider(color = Color.White.copy(alpha = 0.12f))
-
+        // 4. باشقۇرغۇچى مەخپىي نومۇرىنى يېڭىلاش ۋە تازىلاش
+        item {
+            Surface(shape = RoundedCornerShape(22.dp), color = cardColor, border = BorderStroke(1.dp, AdminRose.copy(alpha = 0.4f))) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedTextField(
                         value = newAdminPwd,
                         onValueChange = { newAdminPwd = it },
-                        label = { Text("باشقۇرغۇچى مەخپىي نومۇرىنى يېڭىلاش") },
+                        label = { Text(tr(lang, "يېڭى باشقۇرغۇچى مەخپىي نومۇرى", "كلمة مرور المسؤول الجديدة")) },
                         singleLine = true,
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
                     Button(
                         onClick = {
-                            if (vault.updateAdminPassword(newAdminPwd)) {
+                            if (storage.updateAdminPassword(newAdminPwd)) {
                                 newAdminPwd = ""
-                                onShowMessage("باشقۇرغۇچى مەخپىي نومۇرى يېڭىلاندى!")
-                            } else {
-                                onShowMessage("كەم دېگەندە 4 خانىلىق مەخپىي نومۇر يېزىڭ")
+                                onShowNotice(tr(lang, "مەخپىي نومۇر يېڭىلاندى!", "تم تحديث كلمة المرور!"))
                             }
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = AdminIndigo),
+                        colors = ButtonDefaults.buttonColors(containerColor = WolfGold),
+                        shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("مەخپىي نومۇرنى ساقلاش", color = Color.White)
+                        Text(tr(lang, "مەخپىي نومۇرنى يېڭىلاش", "تحديث كلمة المرور"), color = WolfBlack, fontWeight = FontWeight.ExtraBold)
                     }
 
                     Button(
-                        onClick = { confirmClearDialog = true },
+                        onClick = onClearAllAccounts,
                         colors = ButtonDefaults.buttonColors(containerColor = AdminRose),
+                        shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Icon(Icons.Filled.DeleteSweep, contentDescription = null, tint = Color.White)
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("ئەپ ئىچىدىكى بارلىق مەلۇماتلارنى تازىلاش", color = Color.White, fontWeight = FontWeight.Bold)
+                        Text(tr(lang, "ئەپ ئىچىدىكى بارلىق ھېساباتلارنى تازىلاش", "مسح جميع الحسابات في التطبيق"), color = Color.White, fontWeight = FontWeight.Bold)
                     }
                 }
             }
         }
     }
-
-    if (confirmClearDialog) {
-        AlertDialog(
-            onDismissRequest = { confirmClearDialog = false },
-            title = { Text("ئەپ ئىچىنى تازىلاش", fontWeight = FontWeight.Bold) },
-            text = { Text("بارلىق ساقلانغان ھېساباتلار ۋە ئەسلەتمىلەرنى پۈتۈنلەي ئۆچۈرۈپ تازىلامسىز؟") },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        confirmClearDialog = false
-                        onClearAllVault()
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = AdminRose)
-                ) {
-                    Text("ھەئە، تازىلاش", color = Color.White)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmClearDialog = false }) {
-                    Text("بىكار قىلىش")
-                }
-            }
-        )
-    }
 }
 
+/**
+ * باش بەتتىكى «VIP ئەزالار» ياكى «ھېسابات ئاچقانلار» سىنبەلگىسىنى چەككەندە ئېچىلىدىغان مەخسۇس بەت
+ */
 @Composable
-fun DedicatedAdminSearchPage(
-    allAccounts: List<ClientAccountRecord>,
-    query: String,
-    onQueryChange: (String) -> Unit,
+fun HomeFilteredAccountsPage(
+    lang: AdminLanguage,
+    filter: HomeAccountListFilter,
+    accounts: List<ManagedUserAccount>,
+    searchQuery: String,
+    cardColor: Color,
+    textColor: Color,
+    onSearchChange: (String) -> Unit,
     onBack: () -> Unit,
-    onCopyText: (String, String) -> Unit,
-    onToggleMonth: (ClientAccountRecord, Int) -> Unit,
-    onEditAccount: (ClientAccountRecord) -> Unit,
-    onDeleteAccount: (ClientAccountRecord) -> Unit
+    onCopyCode: (String) -> Unit,
+    onSendGmail: (ManagedUserAccount) -> Unit,
+    onDelete: (ManagedUserAccount) -> Unit
 ) {
-    val cleanQuery = query.trim().lowercase()
-    val filtered = remember(allAccounts, cleanQuery) {
-        when {
-            cleanQuery.isEmpty() -> allAccounts
-            cleanQuery == "paid" -> allAccounts.filter { it.paidCount() == 12 }
-            cleanQuery == "unpaid" -> allAccounts.filter { it.paidCount() < 12 }
-            else -> allAccounts.filter { acc ->
-                acc.fullName.lowercase().contains(cleanQuery) ||
-                    acc.username.lowercase().contains(cleanQuery) ||
-                    acc.streetName.lowercase().contains(cleanQuery) ||
-                    acc.houseNumber.lowercase().contains(cleanQuery) ||
-                    acc.email.lowercase().contains(cleanQuery) ||
-                    acc.licenseCode.lowercase().contains(cleanQuery) ||
-                    acc.notes.lowercase().contains(cleanQuery)
-            }
+    val q = searchQuery.trim().lowercase()
+    val list = remember(accounts, filter, q) {
+        val base = if (filter == HomeAccountListFilter.VIP_MEMBERS) {
+            accounts.filter { it.isVipActive() }
+        } else {
+            accounts
+        }
+        if (q.isEmpty()) base
+        else base.filter {
+            it.fullName.lowercase().contains(q) ||
+                it.username.lowercase().contains(q) ||
+                it.gmail.lowercase().contains(q) ||
+                it.address.lowercase().contains(q) ||
+                it.licenseCode.lowercase().contains(q)
         }
     }
 
-    Scaffold(containerColor = AdminDarkBg) { innerPadding ->
+    val title = if (filter == HomeAccountListFilter.VIP_MEMBERS) {
+        tr(lang, "VIP ئەزالار تىزىملىكى (${list.size})", "قائمة أعضاء VIP (${list.size})")
+    } else {
+        tr(lang, "ھېسابات ئاچقانلار تىزىملىكى (${list.size})", "قائمة الحسابات المفتوحة (${list.size})")
+    }
+
+    Scaffold(containerColor = Color.Transparent) { innerPadding ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -1986,41 +1973,26 @@ fun DedicatedAdminSearchPage(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
-                Surface(
-                    shape = RoundedCornerShape(22.dp),
-                    color = AdminCardSurface,
-                    border = BorderStroke(1.dp, AdminTurquoise.copy(alpha = 0.45f))
-                ) {
+                Surface(shape = RoundedCornerShape(22.dp), color = cardColor, border = BorderStroke(1.2.dp, WolfGold)) {
                     Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             Button(
                                 onClick = onBack,
-                                colors = ButtonDefaults.buttonColors(containerColor = AdminIndigo),
+                                colors = ButtonDefaults.buttonColors(containerColor = WolfGold),
                                 shape = RoundedCornerShape(12.dp)
                             ) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = Color.White)
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = WolfBlack)
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("قايتىش", color = Color.White)
+                                Text(tr(lang, "قايتىش", "رجوع"), color = WolfBlack, fontWeight = FontWeight.Bold)
                             }
-                            Text(
-                                text = "ئىزدەش نەتىجىسى (${filtered.size})",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.ExtraBold
-                            )
+                            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold, color = textColor)
                         }
 
                         OutlinedTextField(
-                            value = query,
-                            onValueChange = onQueryChange,
-                            placeholder = { Text("ئىسىم، كوچا، ئادرېس ياكى ھېسابات ئىسمىنى يېزىڭ...") },
-                            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = AdminTurquoise) },
-                            trailingIcon = {
-                                if (query.isNotEmpty()) {
-                                    IconButton(onClick = { onQueryChange("") }) {
-                                        Icon(Icons.Filled.Close, contentDescription = null)
-                                    }
-                                }
-                            },
+                            value = searchQuery,
+                            onValueChange = onSearchChange,
+                            placeholder = { Text(tr(lang, "ئىسىم، Gmail ياكى ئورۇن ئىزدەش...", "بحث بالاسم أو Gmail أو الموقع...")) },
+                            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = WolfGold) },
                             singleLine = true,
                             shape = RoundedCornerShape(14.dp),
                             modifier = Modifier.fillMaxWidth()
@@ -2029,167 +2001,65 @@ fun DedicatedAdminSearchPage(
                 }
             }
 
-            if (filtered.isEmpty()) {
+            if (list.isEmpty()) {
                 item {
-                    Surface(
-                        shape = RoundedCornerShape(20.dp),
-                        color = AdminCardSurface,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(
+                    Surface(shape = RoundedCornerShape(20.dp), color = cardColor, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = tr(lang, "تېخى ھېسابات قوشۇلمىغان", "لا توجد حسابات مضافة بعد"),
                             modifier = Modifier.padding(32.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(Icons.Filled.SearchOff, contentDescription = null, tint = AdminRose, modifier = Modifier.size(46.dp))
-                            Text("بۇ ئىزدەش شەرتىگە ماس كېلىدىغان ھېسابات تېپىلمىدى", fontWeight = FontWeight.Bold)
-                        }
+                            textAlign = TextAlign.Center,
+                            fontWeight = FontWeight.Bold,
+                            color = textColor
+                        )
                     }
                 }
             } else {
-                items(filtered, key = { it.id }) { acc ->
-                    AdminClientDetailCard(
-                        acc = acc,
-                        onToggleMonth = { mIdx -> onToggleMonth(acc, mIdx) },
-                        onEdit = { onEditAccount(acc) },
-                        onDelete = { onDeleteAccount(acc) },
-                        onCopy = onCopyText
-                    )
+                items(list, key = { it.id }) { acc ->
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = cardColor,
+                        border = BorderStroke(1.dp, if (acc.isVipActive()) WolfGold else AdminTurquoise.copy(alpha = 0.4f))
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(acc.fullName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold, color = textColor)
+                                    Text("Gmail: ${acc.gmail}", style = MaterialTheme.typography.bodySmall, color = AdminTurquoise)
+                                    Text("${tr(lang, "ھېسابات نامى", "المعرف")}: ${acc.username} | ${tr(lang, "مەخپىي نومۇر", "كلمة المرور")}: ${acc.password}", style = MaterialTheme.typography.labelSmall, color = textColor.copy(alpha = 0.8f))
+                                    if (acc.address.isNotBlank()) {
+                                        Text("${tr(lang, "ئادرېس", "العنوان")}: ${acc.address}", style = MaterialTheme.typography.labelSmall, color = textColor.copy(alpha = 0.7f))
+                                    }
+                                }
+                                IconButton(onClick = { onDelete(acc) }) {
+                                    Icon(Icons.Filled.Delete, contentDescription = null, tint = AdminRose)
+                                }
+                            }
+
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = AdminEmerald.copy(alpha = 0.14f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(acc.licenseCode, fontWeight = FontWeight.ExtraBold, color = AdminEmerald)
+                                    Row {
+                                        IconButton(onClick = { onCopyCode(acc.licenseCode) }) {
+                                            Icon(Icons.Filled.ContentCopy, contentDescription = null, tint = WolfGold)
+                                        }
+                                        IconButton(onClick = { onSendGmail(acc) }) {
+                                            Icon(Icons.Filled.Email, contentDescription = null, tint = AdminTurquoise)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
     }
-}
-
-@Composable
-fun AccountEditorDialog(
-    initial: ClientAccountRecord?,
-    vault: AdminVaultStorage,
-    onDismiss: () -> Unit,
-    onSave: (ClientAccountRecord) -> Unit
-) {
-    val today = remember { SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date()) }
-    var fullName by remember { mutableStateOf(initial?.fullName.orEmpty()) }
-    var username by remember { mutableStateOf(initial?.username.orEmpty()) }
-    var password by remember { mutableStateOf(initial?.password.orEmpty()) }
-    var streetName by remember { mutableStateOf(initial?.streetName.orEmpty()) }
-    var houseNumber by remember { mutableStateOf(initial?.houseNumber.orEmpty()) }
-    var flowAmount by remember { mutableStateOf(initial?.flowAmount ?: "100 GB") }
-    var openDate by remember { mutableStateOf(initial?.openDate ?: today) }
-    var notes by remember { mutableStateOf(initial?.notes.orEmpty()) }
-    var isVip by remember { mutableStateOf(initial?.isVip ?: false) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Text(if (initial == null) "يېڭى خېرىدار ھېساباتى قوشۇش" else "ھېسابات تەھرىرلەش", fontWeight = FontWeight.ExtraBold)
-        },
-        text = {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedTextField(
-                    value = fullName,
-                    onValueChange = { fullName = it },
-                    label = { Text("خېرىدارنىڭ ئىسمى *") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = username,
-                    onValueChange = { username = it },
-                    label = { Text("ھېسابات ئىسمى (Username) *") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it },
-                    label = { Text("مەخپىي نومۇرى *") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = streetName,
-                    onValueChange = { streetName = it },
-                    label = { Text("كوچا ئىسمى / ئادرېس") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = houseNumber,
-                    onValueChange = { houseNumber = it },
-                    label = { Text("ئۆي نومۇرى") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = flowAmount,
-                    onValueChange = { flowAmount = it },
-                    label = { Text("ئېقىم مىقدارى (GB)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = openDate,
-                    onValueChange = { openDate = it },
-                    label = { Text("تىزىملاتقان ۋاقتى") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = notes,
-                    onValueChange = { notes = it },
-                    label = { Text("ئىزاھات") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("VIP ھوقۇقى بېرىش:")
-                    Switch(checked = isVip, onCheckedChange = { isVip = it })
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    val cleanUser = username.trim().ifEmpty { fullName.trim() }
-                    if (cleanUser.isNotEmpty()) {
-                        val code = vault.generateVerificationCode(cleanUser, isVip)
-                        onSave(
-                            ClientAccountRecord(
-                                id = initial?.id ?: UUID.randomUUID().toString(),
-                                fullName = fullName.trim().ifEmpty { cleanUser },
-                                username = cleanUser,
-                                password = password.trim().ifEmpty { "123456" },
-                                email = initial?.email ?: "$cleanUser@gmail.com",
-                                streetName = streetName.trim(),
-                                houseNumber = houseNumber.trim(),
-                                flowAmount = flowAmount.trim(),
-                                openDate = openDate.trim(),
-                                notes = notes.trim(),
-                                status = if (isVip) "VIP" else "APPROVED",
-                                licenseCode = code,
-                                isVip = isVip,
-                                vipExpireEpochMillis = if (isVip) (initial?.vipExpireEpochMillis?.takeIf { it > 0L } ?: (System.currentTimeMillis() + 30L * 24L * 3600L * 1000L)) else 0L,
-                                paidMonths = initial?.paidMonths ?: List(12) { false }
-                            )
-                        )
-                    }
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = AdminEmerald)
-            ) {
-                Text("ساقلاش", color = Color.White, fontWeight = FontWeight.Bold)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("بىكار قىلىش")
-            }
-        }
-    )
 }
