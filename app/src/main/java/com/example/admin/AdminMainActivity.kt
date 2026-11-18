@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Logout
@@ -351,9 +352,6 @@ class AdminStorageEngine(private val context: Context) {
         }
     }
 
-    /**
-     * تېلېفوندىن تاللانغان APK ھۆججىتىنى ۋاسىتىسىز بىۋاسىتە بۇلۇت ئوقىغا ۋە ئىچكى مۇلازىمېتىرغا چىقىرىش
-     */
     suspend fun hostAndPushApkDirectly(
         apkUri: Uri,
         versionName: String,
@@ -372,12 +370,10 @@ class AdminStorageEngine(private val context: Context) {
                 }
             } ?: throw IllegalArgumentException("APK ھۆججىتىنى ئوقۇغىلى بولمىدى")
 
-            // 1. ئىچكى Wi-Fi/Hotspot بىۋاسىتە تارقىتىش قانىلىنى قوزغىتىش
             startEmbeddedDirectApkServer()
             val localIp = getDeviceLocalIpAddress()
             var directApkUrl = if (localIp.isNotBlank()) "http://$localIp:8989/HesabatClient.apk" else ""
 
-            // 2. يىراقتىكى تور ئارقىلىق بىۋاسىتە چۈشۈرۈش قانىلىغا ئاپتوماتىك يۈكلەش
             withContext(Dispatchers.Main) {
                 onStatus("APK ھۆججىتى بىۋاسىتە يوللاش قانىلىغا چىقىرىلىۋاتىدۇ...")
             }
@@ -415,17 +411,14 @@ class AdminStorageEngine(private val context: Context) {
             }
 
             DataOutputStream(conn.outputStream).use { out ->
-                // reqtype=fileupload
                 out.writeBytes("--$boundary\r\n")
                 out.writeBytes("Content-Disposition: form-data; name=\"reqtype\"\r\n\r\n")
                 out.writeBytes("fileupload\r\n")
 
-                // time=72h
                 out.writeBytes("--$boundary\r\n")
                 out.writeBytes("Content-Disposition: form-data; name=\"time\"\r\n\r\n")
                 out.writeBytes("72h\r\n")
 
-                // fileToUpload
                 out.writeBytes("--$boundary\r\n")
                 out.writeBytes("Content-Disposition: form-data; name=\"fileToUpload\"; filename=\"HesabatClient.apk\"\r\n")
                 out.writeBytes("Content-Type: application/vnd.android.package-archive\r\n\r\n")
@@ -938,7 +931,6 @@ fun AdminRootScreen() {
                                     }
 
                                     AdminTab.UPDATE_PUSH -> {
-                                        // ۋاسىتىسىز بىۋاسىتە APK تاللاپ يوللايدىغان نەشر يوللاش رامكىسى
                                         AdminDirectApkPushTab(
                                             lang = lang,
                                             storage = storage,
@@ -1024,10 +1016,687 @@ fun AdminRootScreen() {
     }
 }
 
-/**
- * 4-بۆلۈم: ۋاسىتىسىز بىۋاسىتە APK ھۆججىتىنى تاللاپ ھېسابات ئەپلىرىگە يوللاش رامكىسى
- * (Gmail ياكى باشقا ئەپ ئاچمايدۇ، ئۇلانما كۆچۈرۈپ يۈرمەيسىز، بىۋاسىتە مۇشۇ رامكىدىلا APK تاللاپ يوللايسىز)
- */
+@Composable
+fun AdminCleanLoginScreen(
+    lang: AdminLanguage,
+    cardColor: Color,
+    textColor: Color,
+    customLogo: ImageBitmap?,
+    onSwitchLang: (AdminLanguage) -> Unit,
+    onVerify: (String) -> Boolean
+) {
+    var password by remember { mutableStateOf("") }
+    var showPassword by remember { mutableStateOf(false) }
+    var errorText by remember { mutableStateOf<String?>(null) }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(20.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .widthIn(max = 430.dp),
+            shape = RoundedCornerShape(30.dp),
+            color = cardColor,
+            border = BorderStroke(1.8.dp, WolfGold)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    AdminLanguage.entries.forEach { l ->
+                        FilterChip(
+                            selected = lang == l,
+                            onClick = { onSwitchLang(l) },
+                            label = { Text(l.title) },
+                            modifier = Modifier.padding(start = 6.dp)
+                        )
+                    }
+                }
+
+                AdminBrandLogo(customLogo = customLogo, sizeDp = 88)
+
+                Text(
+                    text = tr(lang, "باشقۇرغۇچى مەركىزى", "مركز تحكم المسؤول"),
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = textColor
+                )
+
+                Text(
+                    text = ADMIN_MASTER_EMAIL,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = WolfGold,
+                    fontWeight = FontWeight.Bold
+                )
+
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = {
+                        password = it
+                        errorText = null
+                    },
+                    label = { Text(tr(lang, "باشقۇرغۇچى مەخپىي نومۇرى", "كلمة مرور المسؤول")) },
+                    leadingIcon = { Icon(Icons.Filled.Lock, contentDescription = null, tint = WolfGold) },
+                    trailingIcon = {
+                        IconButton(onClick = { showPassword = !showPassword }) {
+                            Icon(
+                                imageVector = if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                contentDescription = null
+                            )
+                        }
+                    },
+                    visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                    singleLine = true,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                if (errorText != null) {
+                    Text(
+                        text = errorText.orEmpty(),
+                        color = AdminRose,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Button(
+                    onClick = {
+                        if (!onVerify(password)) {
+                            errorText = tr(lang, "مەخپىي نومۇر خاتا!", "كلمة المرور غير صحيحة!")
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = WolfGold),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp)
+                ) {
+                    Icon(Icons.Filled.Login, contentDescription = null, tint = WolfBlack)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = tr(lang, "دەلىللەپ كىرىش", "تسجيل الدخول"),
+                        color = WolfBlack,
+                        fontWeight = FontWeight.ExtraBold,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun AdminCleanHomeTab(
+    lang: AdminLanguage,
+    accounts: List<ManagedUserAccount>,
+    searchQuery: String,
+    cardColor: Color,
+    textColor: Color,
+    onSearchChange: (String) -> Unit,
+    onTriggerSearch: () -> Unit,
+    onOpenVipMembers: () -> Unit,
+    onOpenAllAccounts: () -> Unit,
+    onNavigateTab: (AdminTab) -> Unit
+) {
+    val vipCount = accounts.count { it.isVipActive() }
+    val totalOpenedCount = accounts.size
+
+    LazyColumn(
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = PaddingValues(bottom = 84.dp)
+    ) {
+        item {
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = cardColor,
+                border = BorderStroke(1.dp, WolfGold.copy(alpha = 0.35f))
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = onSearchChange,
+                        placeholder = {
+                            Text(tr(lang, "Gmail، ئىسىم ياكى ھېسابات نامى بويىچە ئىزدەش...", "البحث عبر Gmail أو الاسم أو الحساب..."))
+                        },
+                        leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = WolfGold) },
+                        trailingIcon = {
+                            Button(
+                                onClick = onTriggerSearch,
+                                colors = ButtonDefaults.buttonColors(containerColor = WolfGold),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.padding(end = 6.dp)
+                            ) {
+                                Text(tr(lang, "ئىزدەش", "بحث"), color = WolfBlack, fontWeight = FontWeight.ExtraBold)
+                            }
+                        },
+                        singleLine = true,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                HomeSymbolCard(
+                    title = tr(lang, "VIP ئەزالار", "أعضاء VIP"),
+                    subtitle = tr(lang, "چېكىپ تىزىملىكنى كۆرۈش", "اضغط لعرض القائمة"),
+                    count = vipCount,
+                    icon = Icons.Filled.WorkspacePremium,
+                    accent = WolfGold,
+                    cardColor = cardColor,
+                    textColor = textColor,
+                    modifier = Modifier.weight(1f),
+                    onClick = onOpenVipMembers
+                )
+                HomeSymbolCard(
+                    title = tr(lang, "ھېسابات ئاچقانلار", "الحسابات المفتوحة"),
+                    subtitle = tr(lang, "چېكىپ تىزىملىكنى كۆرۈش", "اضغط لعرض القائمة"),
+                    count = totalOpenedCount,
+                    icon = Icons.Filled.VerifiedUser,
+                    accent = AdminTurquoise,
+                    cardColor = cardColor,
+                    textColor = textColor,
+                    modifier = Modifier.weight(1f),
+                    onClick = onOpenAllAccounts
+                )
+            }
+        }
+
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                HomeSymbolCard(
+                    title = tr(lang, "يېڭى ھېسابات ئېچىپ بېرىش", "فتح حساب جديد"),
+                    subtitle = tr(lang, "Gmail / ئىسىم / ھېسابات", "Gmail / الاسم / المعرف"),
+                    count = null,
+                    icon = Icons.Filled.PersonAdd,
+                    accent = AdminEmerald,
+                    cardColor = cardColor,
+                    textColor = textColor,
+                    modifier = Modifier.weight(1f),
+                    onClick = { onNavigateTab(AdminTab.OPEN_ACCOUNT) }
+                )
+                HomeSymbolCard(
+                    title = tr(lang, "ئەپ يېڭى نەشرىنى يوللاش", "إرسال تحديث التطبيق"),
+                    subtitle = tr(lang, "ۋاسىتىسىز بىۋاسىتە يوللاش", "إرسال مباشر للتطبيقات"),
+                    count = null,
+                    icon = Icons.Filled.SystemUpdate,
+                    accent = AdminIndigo,
+                    cardColor = cardColor,
+                    textColor = textColor,
+                    modifier = Modifier.weight(1f),
+                    onClick = { onNavigateTab(AdminTab.UPDATE_PUSH) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun HomeSymbolCard(
+    title: String,
+    subtitle: String,
+    count: Int?,
+    icon: ImageVector,
+    accent: Color,
+    cardColor: Color,
+    textColor: Color,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = modifier.clickable { onClick() },
+        shape = RoundedCornerShape(24.dp),
+        color = cardColor,
+        border = BorderStroke(1.5.dp, accent.copy(alpha = 0.6f))
+    ) {
+        Column(
+            modifier = Modifier.padding(vertical = 22.dp, horizontal = 14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(60.dp)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(accent.copy(alpha = 0.2f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(icon, contentDescription = title, tint = accent, modifier = Modifier.size(34.dp))
+            }
+            if (count != null) {
+                Text(
+                    text = "$count",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = accent
+                )
+            }
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.ExtraBold,
+                color = textColor,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.labelSmall,
+                color = accent,
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+@Composable
+fun AdminOpenAccountTab(
+    lang: AdminLanguage,
+    storage: AdminStorageEngine,
+    accounts: List<ManagedUserAccount>,
+    cardColor: Color,
+    textColor: Color,
+    onAccountCreated: (ManagedUserAccount, Boolean) -> Unit
+) {
+    var selectedMethod by remember { mutableStateOf(AccountOpenMethod.BY_GMAIL) }
+    var gmailInput by remember { mutableStateOf("") }
+    var fullNameInput by remember { mutableStateOf("") }
+    var accountIdInput by remember { mutableStateOf("") }
+    var passwordInput by remember { mutableStateOf("") }
+    var addressInput by remember { mutableStateOf("") }
+    var grantVip by remember { mutableStateOf(false) }
+    var vipDays by remember { mutableIntStateOf(30) }
+
+    val primaryIdentifier = when (selectedMethod) {
+        AccountOpenMethod.BY_GMAIL -> gmailInput.trim()
+        AccountOpenMethod.BY_NAME -> fullNameInput.trim()
+        AccountOpenMethod.BY_ACCOUNT_ID -> accountIdInput.trim()
+    }
+
+    val liveGeneratedCode = remember(primaryIdentifier, grantVip) {
+        storage.generateVerificationCode(primaryIdentifier, grantVip)
+    }
+
+    LazyColumn(
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = PaddingValues(bottom = 84.dp)
+    ) {
+        item {
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = cardColor,
+                border = BorderStroke(1.5.dp, WolfGold.copy(alpha = 0.55f))
+            ) {
+                Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = tr(lang, "باشقىلارغا ھېسابات ئېچىپ بېرىش تىزىملىكى", "قائمة فتح حساب للآخرين"),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = textColor
+                    )
+
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        AccountOpenMethod.entries.forEach { method ->
+                            val isSelected = selectedMethod == method
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = if (isSelected) WolfGold.copy(alpha = 0.22f) else Color.Transparent,
+                                border = BorderStroke(1.2.dp, if (isSelected) WolfGold else Color.Gray.copy(alpha = 0.35f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { selectedMethod = method }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Icon(method.icon, contentDescription = null, tint = if (isSelected) WolfGold else AdminTurquoise)
+                                    Text(
+                                        text = tr(lang, method.ugLabel, method.arLabel),
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = textColor,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    if (isSelected) {
+                                        Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = WolfGold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(color = WolfGold.copy(alpha = 0.25f))
+
+                    when (selectedMethod) {
+                        AccountOpenMethod.BY_GMAIL -> {
+                            OutlinedTextField(
+                                value = gmailInput,
+                                onValueChange = { gmailInput = it },
+                                label = { Text(tr(lang, "خېرىدارنىڭ Gmail ئادرېسى *", "عنوان Gmail للعميل *")) },
+                                placeholder = { Text("user@gmail.com") },
+                                leadingIcon = { Icon(Icons.Filled.Email, contentDescription = null, tint = WolfGold) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            OutlinedTextField(
+                                value = fullNameInput,
+                                onValueChange = { fullNameInput = it },
+                                label = { Text(tr(lang, "خېرىدارنىڭ ئىسمى (ئىختىيارىي)", "اسم العميل (اختياري)")) },
+                                leadingIcon = { Icon(Icons.Filled.Person, contentDescription = null, tint = AdminTurquoise) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+
+                        AccountOpenMethod.BY_NAME -> {
+                            OutlinedTextField(
+                                value = fullNameInput,
+                                onValueChange = { fullNameInput = it },
+                                label = { Text(tr(lang, "خېرىدارنىڭ تولۇق ئىسمى *", "الاسم الكامل للعميل *")) },
+                                leadingIcon = { Icon(Icons.Filled.Person, contentDescription = null, tint = WolfGold) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            OutlinedTextField(
+                                value = gmailInput,
+                                onValueChange = { gmailInput = it },
+                                label = { Text(tr(lang, "ئالاقىلىشىش Gmail ئادرېسى", "عنوان Gmail للتواصل")) },
+                                leadingIcon = { Icon(Icons.Filled.Email, contentDescription = null, tint = AdminTurquoise) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+
+                        AccountOpenMethod.BY_ACCOUNT_ID -> {
+                            OutlinedTextField(
+                                value = accountIdInput,
+                                onValueChange = { accountIdInput = it },
+                                label = { Text(tr(lang, "مەخسۇس ھېسابات نامى (ID) *", "اسم/معرف الحساب *")) },
+                                leadingIcon = { Icon(Icons.Filled.Badge, contentDescription = null, tint = WolfGold) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            OutlinedTextField(
+                                value = fullNameInput,
+                                onValueChange = { fullNameInput = it },
+                                label = { Text(tr(lang, "خېرىدارنىڭ ئىسمى", "اسم العميل")) },
+                                leadingIcon = { Icon(Icons.Filled.Person, contentDescription = null, tint = AdminTurquoise) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            OutlinedTextField(
+                                value = gmailInput,
+                                onValueChange = { gmailInput = it },
+                                label = { Text(tr(lang, "خېرىدارنىڭ Gmail ئادرېسى", "عنوان Gmail للعميل")) },
+                                leadingIcon = { Icon(Icons.Filled.Email, contentDescription = null, tint = AdminEmerald) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = passwordInput,
+                        onValueChange = { passwordInput = it },
+                        label = { Text(tr(lang, "ھېسابات مەخپىي نومۇرى *", "كلمة مرور الحساب *")) },
+                        leadingIcon = { Icon(Icons.Filled.Key, contentDescription = null, tint = AdminEmerald) },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = addressInput,
+                        onValueChange = { addressInput = it },
+                        label = { Text(tr(lang, "ئورنى / ئادرېسى", "الموقع / العنوان")) },
+                        leadingIcon = { Icon(Icons.Filled.LocationOn, contentDescription = null, tint = AdminRose) },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = tr(lang, "VIP ھوقۇقى بىلەن ئېچىش (كودسىز بىۋاسىتە كىرىدۇ)", "فتح كعضو VIP (دخول مباشر بدون رمز)"),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold,
+                            color = textColor
+                        )
+                        Switch(checked = grantVip, onCheckedChange = { grantVip = it })
+                    }
+
+                    if (liveGeneratedCode.isNotBlank()) {
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = AdminEmerald.copy(alpha = 0.15f),
+                            border = BorderStroke(1.2.dp, AdminEmerald),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = tr(lang, "بۇ ھېساباتنىڭ مەخسۇس دەلىللەش كودى:", "رمز التفعيل الخاص بهذا الحساب:"),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = textColor
+                                )
+                                Text(
+                                    text = liveGeneratedCode,
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = AdminEmerald
+                                )
+                            }
+                        }
+                    }
+
+                    val createRecord: (Boolean) -> Unit = { sendMail ->
+                        if (primaryIdentifier.isNotBlank()) {
+                            val today = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date())
+                            val finalUsername = when (selectedMethod) {
+                                AccountOpenMethod.BY_GMAIL -> gmailInput.trim()
+                                AccountOpenMethod.BY_NAME -> fullNameInput.trim()
+                                AccountOpenMethod.BY_ACCOUNT_ID -> accountIdInput.trim()
+                            }
+                            val finalGmail = if (gmailInput.contains("@")) gmailInput.trim() else "$finalUsername@gmail.com"
+                            val newAcc = ManagedUserAccount(
+                                id = UUID.randomUUID().toString(),
+                                openMethod = selectedMethod.name,
+                                fullName = fullNameInput.trim().ifBlank { finalUsername },
+                                username = finalUsername,
+                                gmail = finalGmail,
+                                password = passwordInput.trim().ifBlank { "123456" },
+                                address = addressInput.trim(),
+                                licenseCode = liveGeneratedCode,
+                                isVip = grantVip,
+                                vipExpireEpochMillis = if (grantVip) System.currentTimeMillis() + vipDays.toLong() * 24L * 3600L * 1000L else 0L,
+                                status = if (grantVip) "VIP" else "ACTIVE",
+                                createdAt = today
+                            )
+                            onAccountCreated(newAcc, sendMail)
+                            gmailInput = ""
+                            fullNameInput = ""
+                            accountIdInput = ""
+                            passwordInput = ""
+                            addressInput = ""
+                        }
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                        Button(
+                            onClick = { createRecord(false) },
+                            colors = ButtonDefaults.buttonColors(containerColor = AdminEmerald),
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Filled.Check, contentDescription = null, tint = Color.White)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(tr(lang, "ھېسابات ئېچىش", "فتح الحساب"), color = Color.White, fontWeight = FontWeight.Bold)
+                        }
+
+                        Button(
+                            onClick = { createRecord(true) },
+                            colors = ButtonDefaults.buttonColors(containerColor = WolfGold),
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, tint = WolfBlack)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(tr(lang, "ئېچىپ Gmail غا يوللاش", "فتح وإرسال لـ Gmail"), color = WolfBlack, fontWeight = FontWeight.ExtraBold)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun AdminVipDurationTab(
+    lang: AdminLanguage,
+    accounts: List<ManagedUserAccount>,
+    storage: AdminStorageEngine,
+    cardColor: Color,
+    textColor: Color,
+    onUpdateVip: (ManagedUserAccount, Int) -> Unit
+) {
+    LazyColumn(
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(bottom = 84.dp)
+    ) {
+        item {
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = cardColor,
+                border = BorderStroke(1.2.dp, WolfGold)
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Filled.WorkspacePremium, contentDescription = null, tint = WolfGold)
+                        Text(
+                            text = tr(lang, "VIP ئەزالار ۋە مۇددەت باشقۇرۇش", "إدارة أعضاء VIP والمدة"),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = textColor
+                        )
+                    }
+                    Text(
+                        text = tr(
+                            lang,
+                            "VIP ئېچىپ بېرىلگەن ھېساباتلار دەلىللەش كودى ئىشلەتمەي بىۋاسىتە ئەپكە كىرەلەيدۇ:",
+                            "الحسابات التي تملك صلاحية VIP يمكنها الدخول مباشرة دون رمز تفعيل:"
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = textColor.copy(alpha = 0.75f)
+                    )
+                }
+            }
+        }
+
+        if (accounts.isEmpty()) {
+            item {
+                Surface(shape = RoundedCornerShape(20.dp), color = cardColor, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = tr(lang, "ھازىرچە ئېچىلغان ھېسابات يوق. «ھېسابات ئېچىش» بۆلۈمىدىن قوشۇڭ.", "لا توجد حسابات حالياً. أضف حساباً من قسم فتح حساب."),
+                        modifier = Modifier.padding(28.dp),
+                        textAlign = TextAlign.Center,
+                        color = textColor
+                    )
+                }
+            }
+        } else {
+            items(accounts, key = { it.id }) { acc ->
+                val isVip = acc.isVipActive()
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = cardColor,
+                    border = BorderStroke(1.2.dp, if (isVip) WolfGold else Color.Gray.copy(alpha = 0.3f))
+                ) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Column {
+                                Text(acc.fullName, fontWeight = FontWeight.ExtraBold, color = textColor)
+                                Text(acc.gmail, style = MaterialTheme.typography.labelSmall, color = AdminTurquoise)
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isVip) WolfGold else Color.Gray.copy(alpha = 0.2f)
+                            ) {
+                                Text(
+                                    text = if (isVip) "VIP (${acc.vipRemainingDays()} ${tr(lang, "كۈن", "يوم")})" else tr(lang, "ئادەتتىكى", "عادي"),
+                                    color = if (isVip) WolfBlack else textColor,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            listOf(
+                                7 to tr(lang, "7 كۈن", "7 أيام"),
+                                30 to tr(lang, "1 ئاي", "شهر واحد"),
+                                90 to tr(lang, "3 ئاي", "3 أشهر"),
+                                180 to tr(lang, "6 ئاي", "6 أشهر"),
+                                365 to tr(lang, "1 يىل", "سنة واحدة")
+                            ).forEach { (days, label) ->
+                                FilterChip(
+                                    selected = false,
+                                    onClick = { onUpdateVip(acc, days) },
+                                    leadingIcon = { Icon(Icons.Filled.Star, contentDescription = null, tint = WolfGold, modifier = Modifier.size(15.dp)) },
+                                    label = { Text(label) }
+                                )
+                            }
+                            if (isVip) {
+                                FilterChip(
+                                    selected = false,
+                                    onClick = { onUpdateVip(acc, 0) },
+                                    label = { Text(tr(lang, "VIP توختىتىش", "إلغاء VIP"), color = AdminRose) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun AdminDirectApkPushTab(
     lang: AdminLanguage,
@@ -1084,7 +1753,10 @@ fun AdminDirectApkPushTab(
                 color = cardColor,
                 border = BorderStroke(1.8.dp, WolfGold)
             ) {
-                Column(modifier = Modifier.padding(18.dp),VerticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Icon(Icons.Filled.SystemUpdate, contentDescription = null, tint = WolfGold, modifier = Modifier.size(30.dp))
                         Column {
@@ -1106,7 +1778,6 @@ fun AdminDirectApkPushTab(
                         }
                     }
 
-                    // 1. تېلېفوندىن APK ھۆججىتىنى تاللاش كۇنۇپكىسى
                     Surface(
                         shape = RoundedCornerShape(16.dp),
                         color = if (selectedApkUri != null) AdminEmerald.copy(alpha = 0.16f) else WolfGold.copy(alpha = 0.14f),
@@ -1216,7 +1887,6 @@ fun AdminDirectApkPushTab(
                         }
                     }
 
-                    // 2. ۋاسىتىسىز بىۋاسىتە ھېسابات ئەپىگە يوللاش كۇنۇپكىسى
                     Button(
                         onClick = {
                             if (selectedApkUri == null) {
@@ -1270,6 +1940,357 @@ fun AdminDirectApkPushTab(
                                 color = WolfBlack,
                                 fontWeight = FontWeight.ExtraBold
                             )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun AdminComprehensiveSettingsTab(
+    lang: AdminLanguage,
+    isDark: Boolean,
+    storage: AdminStorageEngine,
+    clientConfig: ClientAppControlConfig,
+    cardColor: Color,
+    textColor: Color,
+    onLangChange: (AdminLanguage) -> Unit,
+    onDarkChange: (Boolean) -> Unit,
+    onPickBackground: (Uri) -> Unit,
+    onResetBackground: () -> Unit,
+    onPickLogo: (Uri) -> Unit,
+    onSaveClientConfig: (ClientAppControlConfig) -> Unit,
+    onClearAllAccounts: () -> Unit,
+    onShowNotice: (String) -> Unit
+) {
+    var allowReg by remember { mutableStateOf(clientConfig.allowNewRegistration) }
+    var reqCode by remember { mutableStateOf(clientConfig.requireVerificationCode) }
+    var remoteLock by remember { mutableStateOf(clientConfig.remoteMaintenanceLock) }
+    var bannerText by remember { mutableStateOf(clientConfig.announcementBanner) }
+    var cloudUrl by remember { mutableStateOf(storage.getCloudSyncUrl()) }
+    var newAdminPwd by remember { mutableStateOf("") }
+
+    val bgPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) onPickBackground(uri)
+    }
+    val logoPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) onPickLogo(uri)
+    }
+
+    LazyColumn(
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = PaddingValues(bottom = 84.dp)
+    ) {
+        item {
+            Surface(shape = RoundedCornerShape(22.dp), color = cardColor, border = BorderStroke(1.dp, WolfGold.copy(alpha = 0.4f))) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = tr(lang, "تىل ۋە كېچە-كۈندۈزلۈك كۆرۈنۈش", "اللغة والوضع الليلي/النهاري"),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = textColor
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                        AdminLanguage.entries.forEach { l ->
+                            FilterChip(
+                                selected = lang == l,
+                                onClick = { onLangChange(l) },
+                                label = { Text(l.title) },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(tr(lang, "كېچىلىك قاراڭغۇ ھالەت (Dark Mode)", "الوضع الليلي الداكن"), color = textColor, fontWeight = FontWeight.Bold)
+                        Switch(checked = isDark, onCheckedChange = onDarkChange)
+                    }
+                }
+            }
+        }
+
+        item {
+            Surface(shape = RoundedCornerShape(22.dp), color = cardColor, border = BorderStroke(1.dp, AdminTurquoise.copy(alpha = 0.4f))) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = tr(lang, "تەگلىك ۋە لوگو رەسىم تەڭشىكى", "إعدادات الخلفية والشعار"),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = textColor
+                    )
+                    Button(
+                        onClick = { bgPicker.launch("image/*") },
+                        colors = ButtonDefaults.buttonColors(containerColor = AdminIndigo),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.Image, contentDescription = null, tint = Color.White)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(tr(lang, "تېلېفوندىن تەگلىك رەسىم تاللاش", "اختيار صورة خلفية من الهاتف"), color = Color.White)
+                    }
+                    OutlinedButton(
+                        onClick = onResetBackground,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(tr(lang, "ئەسلى تەگلىككە قايتۇرۇش", "استعادة الخلفية الأصلية"))
+                    }
+                    Button(
+                        onClick = { logoPicker.launch("image/*") },
+                        colors = ButtonDefaults.buttonColors(containerColor = WolfGold),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.Shield, contentDescription = null, tint = WolfBlack)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(tr(lang, "لوگو رەسىمىنى گالېرېيەدىن تاللاش", "اختيار صورة الشعار من المعرض"), color = WolfBlack, fontWeight = FontWeight.ExtraBold)
+                    }
+                }
+            }
+        }
+
+        item {
+            Surface(shape = RoundedCornerShape(22.dp), color = cardColor, border = BorderStroke(1.2.dp, AdminEmerald.copy(alpha = 0.5f))) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = tr(lang, "ھېسابات ئەپىنى يىراقتىن باشقۇرۇش تەڭشەكلىرى", "إعدادات التحكم بتطبيق الحسابات"),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = textColor
+                    )
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text(tr(lang, "يېڭى ھېسابات تىزىملىتىشقا رۇخسەت", "السماح بتسجيل حسابات جديدة"), color = textColor)
+                        Switch(checked = allowReg, onCheckedChange = { allowReg = it })
+                    }
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text(tr(lang, "دەلىللەش كودى مەجبۇرىي بولسۇن", "إلزامية رمز التفعيل"), color = textColor)
+                        Switch(checked = reqCode, onCheckedChange = { reqCode = it })
+                    }
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text(tr(lang, "ھېسابات ئەپىنى يىراقتىن قۇلۇپلاش", "قفل تطبيق الحسابات عن بُعد"), color = AdminRose, fontWeight = FontWeight.Bold)
+                        Switch(checked = remoteLock, onCheckedChange = { remoteLock = it })
+                    }
+
+                    OutlinedTextField(
+                        value = bannerText,
+                        onValueChange = { bannerText = it },
+                        label = { Text(tr(lang, "ھېسابات ئەپى باش بېتىدىكى ئۇقتۇرۇش خېتى", "رسالة الإعلان في تطبيق الحسابات")) },
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = cloudUrl,
+                        onValueChange = {
+                            cloudUrl = it
+                            storage.setCloudSyncUrl(it)
+                        },
+                        label = { Text(tr(lang, "بۇلۇت باغلىنىش ئادرېسى (Cloud Sync URL)", "رابط المزامنة السحابية")) },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Button(
+                        onClick = {
+                            onSaveClientConfig(
+                                ClientAppControlConfig(
+                                    allowNewRegistration = allowReg,
+                                    requireVerificationCode = reqCode,
+                                    remoteMaintenanceLock = remoteLock,
+                                    announcementBanner = bannerText
+                                )
+                            )
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = AdminEmerald),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(tr(lang, "ھېسابات ئەپى تەڭشەكلىرىنى ساقلاش ۋە يوللاش", "حفظ وإرسال إعدادات تطبيق الحسابات"), color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        item {
+            Surface(shape = RoundedCornerShape(22.dp), color = cardColor, border = BorderStroke(1.dp, AdminRose.copy(alpha = 0.4f))) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = newAdminPwd,
+                        onValueChange = { newAdminPwd = it },
+                        label = { Text(tr(lang, "يېڭى باشقۇرغۇچى مەخپىي نومۇرى", "كلمة مرور المسؤول الجديدة")) },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Button(
+                        onClick = {
+                            if (storage.updateAdminPassword(newAdminPwd)) {
+                                newAdminPwd = ""
+                                onShowNotice(tr(lang, "مەخپىي نومۇر يېڭىلاندى!", "تم تحديث كلمة المرور!"))
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = WolfGold),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(tr(lang, "مەخپىي نومۇرنى يېڭىلاش", "تحديث كلمة المرور"), color = WolfBlack, fontWeight = FontWeight.ExtraBold)
+                    }
+
+                    Button(
+                        onClick = onClearAllAccounts,
+                        colors = ButtonDefaults.buttonColors(containerColor = AdminRose),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.DeleteSweep, contentDescription = null, tint = Color.White)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(tr(lang, "ئەپ ئىچىدىكى بارلىق ھېساباتلارنى تازىلاش", "مسح جميع الحسابات في التطبيق"), color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun HomeFilteredAccountsPage(
+    lang: AdminLanguage,
+    filter: HomeAccountListFilter,
+    accounts: List<ManagedUserAccount>,
+    searchQuery: String,
+    cardColor: Color,
+    textColor: Color,
+    onSearchChange: (String) -> Unit,
+    onBack: () -> Unit,
+    onCopyCode: (String) -> Unit,
+    onSendGmail: (ManagedUserAccount) -> Unit,
+    onDelete: (ManagedUserAccount) -> Unit
+) {
+    val q = searchQuery.trim().lowercase()
+    val list = remember(accounts, filter, q) {
+        val base = if (filter == HomeAccountListFilter.VIP_MEMBERS) {
+            accounts.filter { it.isVipActive() }
+        } else {
+            accounts
+        }
+        if (q.isEmpty()) base
+        else base.filter {
+            it.fullName.lowercase().contains(q) ||
+                it.username.lowercase().contains(q) ||
+                it.gmail.lowercase().contains(q) ||
+                it.address.lowercase().contains(q) ||
+                it.licenseCode.lowercase().contains(q)
+        }
+    }
+
+    val title = if (filter == HomeAccountListFilter.VIP_MEMBERS) {
+        tr(lang, "VIP ئەزالار تىزىملىكى (${list.size})", "قائمة أعضاء VIP (${list.size})")
+    } else {
+        tr(lang, "ھېسابات ئاچقانلار تىزىملىكى (${list.size})", "قائمة الحسابات المفتوحة (${list.size})")
+    }
+
+    Scaffold(containerColor = Color.Transparent) { innerPadding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                Surface(shape = RoundedCornerShape(22.dp), color = cardColor, border = BorderStroke(1.2.dp, WolfGold)) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Button(
+                                onClick = onBack,
+                                colors = ButtonDefaults.buttonColors(containerColor = WolfGold),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = WolfBlack)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(tr(lang, "قايتىش", "رجوع"), color = WolfBlack, fontWeight = FontWeight.Bold)
+                            }
+                            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold, color = textColor)
+                        }
+
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = onSearchChange,
+                            placeholder = { Text(tr(lang, "ئىسىم، Gmail ياكى ئورۇن ئىزدەش...", "بحث بالاسم أو Gmail أو الموقع...")) },
+                            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = WolfGold) },
+                            singleLine = true,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
+
+            if (list.isEmpty()) {
+                item {
+                    Surface(shape = RoundedCornerShape(20.dp), color = cardColor, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = tr(lang, "تېخى ھېسابات قوشۇلمىغان", "لا توجد حسابات مضافة بعد"),
+                            modifier = Modifier.padding(32.dp),
+                            textAlign = TextAlign.Center,
+                            fontWeight = FontWeight.Bold,
+                            color = textColor
+                        )
+                    }
+                }
+            } else {
+                items(list, key = { it.id }) { acc ->
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = cardColor,
+                        border = BorderStroke(1.dp, if (acc.isVipActive()) WolfGold else AdminTurquoise.copy(alpha = 0.4f))
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(acc.fullName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold, color = textColor)
+                                    Text("Gmail: ${acc.gmail}", style = MaterialTheme.typography.bodySmall, color = AdminTurquoise)
+                                    Text("${tr(lang, "ھېسابات نامى", "المعرف")}: ${acc.username} | ${tr(lang, "مەخپىي نومۇر", "كلمة المرور")}: ${acc.password}", style = MaterialTheme.typography.labelSmall, color = textColor.copy(alpha = 0.8f))
+                                    if (acc.address.isNotBlank()) {
+                                        Text("${tr(lang, "ئادرېس", "العنوان")}: ${acc.address}", style = MaterialTheme.typography.labelSmall, color = textColor.copy(alpha = 0.7f))
+                                    }
+                                }
+                                IconButton(onClick = { onDelete(acc) }) {
+                                    Icon(Icons.Filled.Delete, contentDescription = null, tint = AdminRose)
+                                }
+                            }
+
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = AdminEmerald.copy(alpha = 0.14f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(acc.licenseCode, fontWeight = FontWeight.ExtraBold, color = AdminEmerald)
+                                    Row {
+                                        IconButton(onClick = { onCopyCode(acc.licenseCode) }) {
+                                            Icon(Icons.Filled.ContentCopy, contentDescription = null, tint = WolfGold)
+                                        }
+                                        IconButton(onClick = { onSendGmail(acc) }) {
+                                            Icon(Icons.Filled.Email, contentDescription = null, tint = AdminTurquoise)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
